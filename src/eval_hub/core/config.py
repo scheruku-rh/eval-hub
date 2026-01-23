@@ -75,6 +75,11 @@ class Settings(BaseSettings):
                 "resources": {"cpu": "2", "memory": "4Gi"},
                 "timeout": 3600,
             },
+"lm_evaluation_harness-backend": {
+  "deploy_crs": False,
+  "model": "local-completions",
+"model_args": "{\"model\":\"qwen2.5-1.5b-instruct.gguf\",\"base_url\":\"http://localhost:8001/v1/completions\",\"tokenizer\":\"Qwen/Qwen2.5-1.5B\"}"
+},
             "guidellm": {
                 "image": "guidellm:latest",
                 "resources": {"cpu": "1", "memory": "2Gi"},

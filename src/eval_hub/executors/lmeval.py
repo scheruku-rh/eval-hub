@@ -562,7 +562,7 @@ class LMEvalExecutor(TrackedExecutor):
         output_file = f"{self.output_path}/results_{context.evaluation_id}_{context.benchmark_spec.name}.json"
         cmd.extend(["--output_path", output_file])
 
-        self.logger.debug(
+        self.logger.info(
             "Running LM Evaluation Harness command",
             evaluation_id=str(context.evaluation_id),
             command=" ".join(cmd),
@@ -604,19 +604,31 @@ class LMEvalExecutor(TrackedExecutor):
                     "Processing LM Evaluation Harness results",
                 )
 
-            # Load results from output file
-            if Path(output_file).exists():
-                with open(output_file) as f:
+            # Load results from output file (or timestamped fallback)
+            result_path = Path(output_file)
+            if not result_path.exists():
+                # lm-eval sometimes appends a timestamp to the output filename
+                pattern = f"{result_path.stem}_*.json"
+                candidates = sorted(
+                    result_path.parent.glob(pattern),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if candidates:
+                    result_path = candidates[0]
+
+            if result_path.exists():
+                with open(result_path) as f:
                     result_data: dict[str, Any] = json.load(f)
                 return result_data
-            else:
-                # Try to parse stdout as JSON
-                try:
-                    return json.loads(stdout.decode())  # type: ignore[no-any-return]
-                except json.JSONDecodeError as e:
-                    raise BackendError(
-                        "Failed to parse LM Evaluation Harness output as JSON"
-                    ) from e
+
+            # Try to parse stdout as JSON
+            try:
+                return json.loads(stdout.decode())  # type: ignore[no-any-return]
+            except json.JSONDecodeError as e:
+                raise BackendError(
+                    "Failed to parse LM Evaluation Harness output as JSON"
+                ) from e
 
         except TimeoutError as e:
             raise BackendError(
@@ -636,6 +648,9 @@ class LMEvalExecutor(TrackedExecutor):
         for task_name, task_results in lmeval_result.items():
             if isinstance(task_results, dict):
                 for metric_name, metric_value in task_results.items():
+                    # Only keep scalar metrics to satisfy EvaluationResult schema
+                    if not isinstance(metric_value, int | float | str):
+                        continue
                     # Flatten metric names
                     full_metric_name = (
                         f"{task_name}_{metric_name}"
