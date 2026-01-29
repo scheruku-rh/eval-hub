@@ -172,7 +172,7 @@ func LoadProviderConfigs(logger *slog.Logger, dirs ...string) (map[string]api.Pr
 //   - error: An error if configuration cannot be loaded or is invalid
 func LoadConfig(logger *slog.Logger, version string, build string, buildDate string, dirs ...string) (*Config, error) {
 	if len(dirs) == 0 {
-		dirs = []string{"config", "./config", "../../config"}
+		dirs = []string{"config", "./config", "../../config", "tests"} // tests is for running the service on a local machine (not local mode)
 	}
 	configValues, err := readConfig(logger, "config", "yaml", dirs...)
 	if err != nil {

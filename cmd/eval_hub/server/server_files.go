@@ -28,7 +28,7 @@ func GetTerminationFile(conf *config.Config, logger *slog.Logger) string {
 		return tf
 	}
 	// this must exist and not be part of the readonly file system
-	tf = "/opt/ibm/ml-repository/work/termination-log"
+	tf = "/opt/evalhub/work/termination-log"
 	logger.Info("Termination file fallback value", "file", tf)
 	return tf
 }
