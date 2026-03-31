@@ -191,6 +191,21 @@ func TestBuildJobAdapterEvalHubModeEnv(t *testing.T) {
 		if got != "k8s" {
 			t.Fatalf("EVALHUB_MODE = %q, want k8s", got)
 		}
+		var podNS string
+		var podNSFound bool
+		for _, e := range adapter.Env {
+			if e.Name == envPodNamespaceName {
+				podNSFound = true
+				podNS = e.Value
+				break
+			}
+		}
+		if !podNSFound {
+			t.Fatalf("adapter missing env %q (needed for X-Tenant when SA token is not automounted)", envPodNamespaceName)
+		}
+		if podNS != "default" {
+			t.Fatalf("%s = %q, want default", envPodNamespaceName, podNS)
+		}
 	})
 	t.Run("local when local mode", func(t *testing.T) {
 		cfg := &jobConfig{
@@ -429,6 +444,11 @@ func TestBuildJobTerminationFileVolume(t *testing.T) {
 	if !adapterMount {
 		t.Fatalf("adapter should mount %q at %q", terminationFileVolumeName, adapterTerminationSharedMountPath)
 	}
+	for _, m := range adapter.VolumeMounts {
+		if m.MountPath == sidecarConfigMountPath {
+			t.Fatalf("adapter must not mount sidecar config at %q (model proxy base comes from job.json callback_url)", sidecarConfigMountPath)
+		}
+	}
 	sidecar := job.Spec.Template.Spec.Containers[1]
 	var sidecarMount bool
 	for _, m := range sidecar.VolumeMounts {
@@ -656,20 +676,41 @@ func TestBuildJobWithModelAuthSecret(t *testing.T) {
 	}
 
 	container := job.Spec.Template.Spec.Containers[0]
-	var foundMount bool
 	for _, m := range container.VolumeMounts {
 		if m.Name == modelAuthVolumeName {
-			foundMount = true
-			if m.MountPath != modelAuthMountPath {
-				t.Fatalf("expected mount path %q, got %q", modelAuthMountPath, m.MountPath)
-			}
-			if !m.ReadOnly {
-				t.Fatalf("expected mount to be read-only")
+			t.Fatalf("adapter must not mount %s (sidecar-only)", modelAuthVolumeName)
+		}
+	}
+
+	if job.Spec.Template.Spec.AutomountServiceAccountToken == nil || *job.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Fatalf("expected AutomountServiceAccountToken false on adapter+sidecar jobs")
+	}
+
+	sidecar := job.Spec.Template.Spec.Containers[1]
+	var sidecarModelMount bool
+	for _, m := range sidecar.VolumeMounts {
+		if m.Name == modelAuthVolumeName {
+			sidecarModelMount = true
+			if m.MountPath != modelAuthMountPath || !m.ReadOnly {
+				t.Fatalf("sidecar: expected read-only model auth mount at %q", modelAuthMountPath)
 			}
 		}
 	}
-	if !foundMount {
-		t.Fatalf("expected volume mount %s to be present", modelAuthVolumeName)
+	if !sidecarModelMount {
+		t.Fatalf("expected sidecar to mount volume %s for model proxy auth", modelAuthVolumeName)
+	}
+
+	var sidecarSATokenMount bool
+	for _, m := range sidecar.VolumeMounts {
+		if m.Name == sidecarSATokenVolumeName {
+			sidecarSATokenMount = true
+			if m.MountPath != sidecarSATokenMountPath || !m.ReadOnly {
+				t.Fatalf("sidecar: expected read-only SA token mount at %q", sidecarSATokenMountPath)
+			}
+		}
+	}
+	if !sidecarSATokenMount {
+		t.Fatalf("expected sidecar to mount %s for eval-hub / model SA token fallback", sidecarSATokenVolumeName)
 	}
 
 	for _, e := range container.Env {

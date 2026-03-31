@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/eval-hub/eval-hub/internal/eval_hub/config"
@@ -152,5 +153,45 @@ func NewOCIHTTPClient(serviceConfig *config.Config, isOTELEnabled bool, logger *
 		return nil, err
 	}
 	client := newHTTPClient(timeout, tlsConfig, isOTELEnabled, logger, "OCI")
+	return client, nil
+}
+
+// pickFirstExistingCACert returns the first non-empty path that exists on disk, or empty if none exist.
+func pickFirstExistingCACert(paths []string, logger *slog.Logger) string {
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		if logger != nil {
+			logger.Debug("model proxy: CA path not found, trying next", "path", p)
+		}
+	}
+	return ""
+}
+
+// NewModelProxyHTTPClient builds an HTTP client for the model upstream (TLS, timeout).
+// Returns (nil, nil) when ModelProxy is not configured or URL is empty.
+func NewModelProxyHTTPClient(serviceConfig *config.Config, isOTELEnabled bool, logger *slog.Logger) (*http.Client, error) {
+	if serviceConfig == nil || serviceConfig.ModelProxy == nil || strings.TrimSpace(serviceConfig.ModelProxy.URL) == "" {
+		return nil, nil
+	}
+	mp := serviceConfig.ModelProxy
+
+	timeout := DefaultHTTPTimeout
+	if mp.HTTPTimeout > 0 {
+		timeout = mp.HTTPTimeout
+	}
+
+	caPath := pickFirstExistingCACert([]string{mp.AuthCACertPath}, logger)
+	tlsConfig, err := buildTLSConfig(caPath, mp.InsecureSkipVerify, logger, "Model")
+	if err != nil {
+		return nil, err
+	}
+
+	client := newHTTPClient(timeout, tlsConfig, isOTELEnabled, logger, "Model")
 	return client, nil
 }

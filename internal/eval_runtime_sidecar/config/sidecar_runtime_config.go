@@ -57,5 +57,16 @@ func LoadSidecarRuntimeConfig(sidecarJSONPath, version, build, buildDate string)
 		}
 	}
 
+	if sc.Model != nil && strings.TrimSpace(sc.Model.URL) != "" {
+		cfg.ModelProxy = &config.ModelProxyConfig{
+			URL:                strings.TrimSpace(sc.Model.URL),
+			AuthAPIKeyPath:     strings.TrimSpace(sc.Model.AuthAPIKeyPath),
+			AuthCACertPath:     strings.TrimSpace(sc.Model.AuthCACertPath),
+			InsecureSkipVerify: sc.Model.InsecureSkipVerify,
+			HTTPTimeout:        sc.Model.HTTPTimeout,
+			TokenCacheTimeout:  sc.Model.TokenCacheTimeout,
+		}
+	}
+
 	return cfg, nil
 }
