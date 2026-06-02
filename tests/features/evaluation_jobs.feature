@@ -33,7 +33,7 @@ Feature: Evaluation Jobs
     And the response should contain the value "{{env:MODEL_URL|http://test.com}}" at path "$.model.url"
     And the response should contain the value "test-evaluation-job" at path "$.name"
     And the response should contain the value "10" at path "$.benchmarks[0].parameters.num_examples"
-    And the response should contain the value "google/flan-t5-small" at path "$.benchmarks[0].parameters.tokenizer"
+    And the response should contain the value "{{env:TOKENIZER|google/flan-t5-small}}" at path "$.benchmarks[0].parameters.tokenizer"
     And the response should not contain the value "collection" at path "$.collection"
     When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
     Then the response code should be 204
@@ -50,7 +50,7 @@ Feature: Evaluation Jobs
     And the response should contain the value "garak|lm_evaluation_harness" at path "$.benchmarks[0].provider_id"
     And the response should contain the value "3" at path "$.benchmarks[0].parameters.num_fewshot"
     And the response should contain the value "5" at path "$.benchmarks[0].parameters.limit"
-    And the response should contain the value "google/flan-t5-small" at path "$.benchmarks[0].parameters.tokenizer"
+    And the response should contain the value "{{env:TOKENIZER|google/flan-t5-small}}" at path "$.benchmarks[0].parameters.tokenizer"
     When I send a GET request to "/api/v1/evaluations/jobs/{id}"
     Then the response code should be 200
     And the response should contain the value "pending" at path "$.status.state"
@@ -60,7 +60,7 @@ Feature: Evaluation Jobs
     And the response should contain the value "garak|lm_evaluation_harness" at path "$.benchmarks[0].provider_id"
     And the response should contain the value "3" at path "$.benchmarks[0].parameters.num_fewshot"
     And the response should contain the value "5" at path "$.benchmarks[0].parameters.limit"
-    And the response should contain the value "google/flan-t5-small" at path "$.benchmarks[0].parameters.tokenizer"
+    And the response should contain the value "{{env:TOKENIZER|google/flan-t5-small}}" at path "$.benchmarks[0].parameters.tokenizer"
     And the response should not contain the value "collection" at path "$.collection"
     And I wait for the evaluation job status to be "completed"
     When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
@@ -153,7 +153,7 @@ Feature: Evaluation Jobs
             "provider_id": "lm_evaluation_harness",
             "parameters": {
               "num_examples": 3,
-              "tokenizer": "google/flan-t5-small"
+              "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}"
             }
           }
         ],
@@ -179,7 +179,7 @@ Feature: Evaluation Jobs
             "provider_id": "lm_evaluation_harness",
             "parameters": {
               "num_examples": 3,
-              "tokenizer": "google/flan-t5-small"
+              "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}"
             }
           }
         ],
@@ -229,7 +229,7 @@ Feature: Evaluation Jobs
             "id": "arc_easy",
             "provider_id": "lm_evaluation_harness",
             "parameters": {
-              "tokenizer": "google/flan-t5-small",
+              "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}",
               "limit": 5,
               "num_examples": 10
             }
@@ -241,7 +241,7 @@ Feature: Evaluation Jobs
               "num_examples": 15,
               "num_fewshot": 3,
               "limit": 5,
-              "tokenizer": "google/flan-t5-small"
+              "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}"
             }
           }
         ]
@@ -368,7 +368,7 @@ Feature: Evaluation Jobs
             "provider_id": "lm_evaluation_harness",
             "parameters": {
               "num_examples": 3,
-              "tokenizer": "google/flan-t5-small"
+              "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}"
             }
           }
         ]
@@ -384,7 +384,7 @@ Feature: Evaluation Jobs
     When I send a GET request to "/api/v1/evaluations/collections/{{value:collection_id}}"
     Then the response code should be 200
     And the response should contain the value "3" at path "$.benchmarks[0].parameters.num_examples"
-    And the response should contain the value "google/flan-t5-small" at path "$.benchmarks[0].parameters.tokenizer"
+    And the response should contain the value "{{env:TOKENIZER|google/flan-t5-small}}" at path "$.benchmarks[0].parameters.tokenizer"
     When I send a GET request to "/api/v1/evaluations/jobs/{id}"
     Then the response code should be 200
     And the response should contain the value "completed" at path "$.status.state"
@@ -420,7 +420,7 @@ Feature: Evaluation Jobs
                 "parameters": {
                     "limit": 10,
                     "num_fewshot": 0,
-                    "tokenizer": "google/flan-t5-small"
+                    "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}"
                 }
             },
             {
@@ -436,7 +436,7 @@ Feature: Evaluation Jobs
                 "parameters": {
                     "limit": 10,
                     "num_fewshot": 0,
-                    "tokenizer": "google/flan-t5-small"
+                    "tokenizer": "{{env:TOKENIZER|google/flan-t5-small}}"
                 }
             }
         ]
