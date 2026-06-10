@@ -22,9 +22,12 @@ type Handlers struct {
 	ociProxy         *httputil.ReverseProxy
 	ociTokenProducer *proxy.OCITokenProducer // created once at startup for OCI auth
 	ociRepository    string                  // from job spec; used to route requests to /registry/{ociRepository}
+	modelProxy       *httputil.ReverseProxy  // model credential-injection proxy; nil when not configured
 }
 
-// New creates handlers and builds reverse proxies for eval-hub, MLflow, and optionally OCI.
+// New creates handlers and builds reverse proxies for eval-hub, MLflow, OCI, and — when the
+// evaluation job uses a model credential secret — model. The model proxy is absent for open
+// models: the adapter talks directly to the model endpoint without going through the sidecar.
 func New(config *config.Config, logger *slog.Logger) (*Handlers, error) {
 	evalHubProxy, err := newEvalhubProxy(config, logger)
 	if err != nil {
@@ -41,6 +44,11 @@ func New(config *config.Config, logger *slog.Logger) (*Handlers, error) {
 		return nil, err
 	}
 
+	modelProxy, err := newModelProxy(config, logger)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Handlers{
 		logger:           logger,
 		serviceConfig:    config,
@@ -49,6 +57,7 @@ func New(config *config.Config, logger *slog.Logger) (*Handlers, error) {
 		ociProxy:         ociProxy,
 		ociTokenProducer: ociTokenProducer,
 		ociRepository:    ociRepository,
+		modelProxy:       modelProxy,
 	}, nil
 }
 
@@ -64,8 +73,10 @@ func (h *Handlers) HandleProxyCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ctx := proxy.ContextWithAuthInput(r.Context(), *tokenParams)
-	ctx = proxy.ContextWithOriginalRequest(ctx, r)
+	ctx := proxy.ContextWithOriginalRequest(r.Context(), r)
+	if tokenParams != nil {
+		ctx = proxy.ContextWithAuthInput(ctx, *tokenParams)
+	}
 	r = r.WithContext(ctx)
 	proxyHandler.ServeHTTP(w, r)
 }
@@ -119,6 +130,13 @@ func (h *Handlers) parseProxyCall(r *http.Request) (*httputil.ReverseProxy, *pro
 		}
 		return nil, nil, fmt.Errorf("oci proxy is not configured")
 	default:
+		// Model credential-injection proxy is the catch-all: when configured, any request
+		// not matched by the specific prefixes above is forwarded to the model target URL.
+		// The model proxy's Director performs ref-token substitution and dynamic URL routing;
+		// it does not use the AuthTokenInput mechanism, so nil is returned.
+		if h.modelProxy != nil {
+			return h.modelProxy, nil, nil
+		}
 		return nil, nil, fmt.Errorf("unknown proxy call: %s", r.RequestURI)
 	}
 }

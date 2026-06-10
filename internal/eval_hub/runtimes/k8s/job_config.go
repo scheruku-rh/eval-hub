@@ -63,7 +63,10 @@ type jobConfig struct {
 	mlflowTrackingURI    string
 	mlflowWorkspace      string
 	ociCredentialsSecret string
-	modelAuthSecretRef   string
+	modelAuthSecretRef   string   // user's real credentials secret (model credential secret) mounted only in sidecar
+	modelInternalRefSecretName   string   // ephemeral ref-token secret (internalModelRef secret) mounted in adapter
+	modelDirectAdapterKeys []string // keys from model credential secret projected directly into the adapter (hf-token, ca_cert)
+	modelTargetURL       string   // real model URL forwarded by the sidecar model proxy
 	sidecarResources     corev1.ResourceRequirements
 	testDataS3           s3TestDataConfig
 	testDataInitImage    string
@@ -163,6 +166,15 @@ func buildJobConfig(evaluation *api.EvaluationJobResource, provider *api.Provide
 		modelAuthSecretRef = strings.TrimSpace(evaluation.Model.Auth.SecretRef)
 	}
 
+	// When model auth is configured, record the real target URL before rewriting.
+	// The job spec model URL is replaced with the sidecar proxy URL so the adapter
+	// routes model calls through the sidecar; the sidecar forwards to modelTargetURL.
+	modelTargetURL := ""
+	modelInternalRefSecretName := ""
+	if modelAuthSecretRef != "" {
+		modelTargetURL = strings.TrimSpace(evaluation.Model.URL)
+	}
+
 	sidecarImage, sidecarResources, err := sidecarImageAndResources(serviceConfig)
 	if err != nil {
 		return nil, err
@@ -191,9 +203,11 @@ func buildJobConfig(evaluation *api.EvaluationJobResource, provider *api.Provide
 		nodeSelector = resolveNodeSelector(runtime.K8s.GPU)
 	}
 
+	resourceGUID := uuid.NewString()
+
 	out := &jobConfig{
 		jobID:                evaluation.Resource.ID,
-		resourceGUID:         uuid.NewString(),
+		resourceGUID:         resourceGUID,
 		namespace:            namespace,
 		providerID:           provider.Resource.ID,
 		benchmarkID:          benchmarkConfig.ID,
@@ -218,6 +232,8 @@ func buildJobConfig(evaluation *api.EvaluationJobResource, provider *api.Provide
 		mlflowWorkspace:      mlflowWorkspace,
 		ociCredentialsSecret: ociCredentialsSecret,
 		modelAuthSecretRef:   modelAuthSecretRef,
+		modelInternalRefSecretName:   modelInternalRefSecretName,
+		modelTargetURL:       modelTargetURL,
 		sidecarResources:     sidecarResources,
 		sidecarBaseURL:       sidecarBaseURL,
 		evalHubURL:           evalHubURL,
@@ -228,6 +244,13 @@ func buildJobConfig(evaluation *api.EvaluationJobResource, provider *api.Provide
 			key:       testDataS3Key,
 			secretRef: testDataS3SecretRef,
 		},
+	}
+
+	// Rewrite the job spec model URL to the sidecar proxy URL so the adapter routes
+	// model calls through the sidecar. The real URL is preserved in modelTargetURL and
+	// written into sidecar_config.json for the sidecar to use as its forwarding target.
+	if out.modelInternalRefSecretName != "" {
+		out.jobSpec.Model.URL = sidecarBaseURL
 	}
 	sidecarJSON, err := sidecarForJobPod(serviceConfig, out)
 	if err != nil {

@@ -53,6 +53,8 @@ const (
 	envOCIAuthConfigPathName          = "OCI_AUTH_CONFIG_PATH"
 	modelAuthVolumeName               = "model-auth"
 	modelAuthMountPath                = "/var/run/secrets/model"
+	modelAuthRealVolumeName           = "model-auth-real"
+	modelAuthRealMountPath            = "/var/run/secrets/model-real"
 	testDataSecretVolumeName          = "test-data-secret"
 	testDataSecretMountPath           = "/var/run/secrets/test-data"
 	serviceCABundleFile               = "service-ca.crt"
@@ -379,8 +381,50 @@ func buildRuntimeContainerVolumesAndMounts(configMap string, cfg *jobConfig) ([]
 		})
 	}
 
-	// Add model auth secret when configured.
-	if cfg.modelAuthSecretRef != "" {
+	// Add model auth volumes. When credential injection is active (modelInternalRefSecretName set),
+	// the adapter sees only the ephemeral ref-token secret (internalModelRef secret) and the sidecar gets
+	// the real credentials secret (model credential secret) separately via buildSidecarContainerVolumesAndMounts.
+	// When credential injection is not active, the adapter receives the real secret directly.
+	if cfg.modelInternalRefSecretName != "" {
+		// Credential-injection path: adapter receives a projected volume combining:
+		//   - internalModelRef secret (all ref/placeholder keys: api-key:ref, model-N_api-key:ref, URLs)
+		//   - model credential secret selectively (direct adapter keys only: hf-token, ca_cert when present)
+		// This keeps internalModelRef secret as purely synthetic values while giving the adapter direct
+		// access to credentials that cannot be proxied through the sidecar.
+		projectedSources := []corev1.VolumeProjection{
+			{
+				Secret: &corev1.SecretProjection{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cfg.modelInternalRefSecretName},
+				},
+			},
+		}
+		if len(cfg.modelDirectAdapterKeys) > 0 {
+			items := make([]corev1.KeyToPath, len(cfg.modelDirectAdapterKeys))
+			for i, k := range cfg.modelDirectAdapterKeys {
+				items[i] = corev1.KeyToPath{Key: k, Path: k}
+			}
+			projectedSources = append(projectedSources, corev1.VolumeProjection{
+				Secret: &corev1.SecretProjection{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cfg.modelAuthSecretRef},
+					Items:                items,
+				},
+			})
+		}
+		volumes = append(volumes, corev1.Volume{
+			Name: modelAuthVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{Sources: projectedSources},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      modelAuthVolumeName,
+			MountPath: modelAuthMountPath,
+			ReadOnly:  true,
+		})
+	} else if cfg.modelAuthSecretRef != "" {
+		// Passthrough-only path: secret has no proxy-injectable credential keys (e.g. ca_cert only).
+		// Mount the real secret directly into the adapter — no internalModelRef secret, no model proxy.
+		// The adapter uses its own auth (e.g. ServiceAccount token) and reads ca_cert for TLS.
 		volumes = append(volumes, corev1.Volume{
 			Name: modelAuthVolumeName,
 			VolumeSource: corev1.VolumeSource{
@@ -486,6 +530,24 @@ func buildSidecarContainerVolumesAndMounts(configMap string, cfg *jobConfig) ([]
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      mlflowTokenVolumeName,
 			MountPath: mlflowTokenMountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// When credential injection is active, mount the real credentials secret (model credential secret) in
+	// the sidecar at modelAuthRealMountPath. The adapter never sees this secret.
+	if cfg.modelInternalRefSecretName != "" && cfg.modelAuthSecretRef != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: modelAuthRealVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: cfg.modelAuthSecretRef,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      modelAuthRealVolumeName,
+			MountPath: modelAuthRealMountPath,
 			ReadOnly:  true,
 		})
 	}
