@@ -1,0 +1,15 @@
+type: object
+description: Configuration for MLFlow experiment tracking
+properties:
+  name:
+    type: string
+    description: Experiment name
+  tags:
+    type: array
+    items:
+      $ref: ./ExperimentTag.yaml
+    maxItems: 20
+    description: Experiment tags
+  artifact_location:
+    type: string
+    description: Artifact storage location

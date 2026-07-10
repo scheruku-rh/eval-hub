@@ -1,0 +1,38 @@
+type: object
+description: |
+  Reference to a benchmark in an evaluation job (top-level benchmarks or collection override list).
+  Does not include a URL; URLs appear only on collection benchmark entries.
+allOf:
+  - $ref: ./Ref.yaml
+  - type: object
+    required:
+      - provider_id
+    properties:
+      provider_id:
+        type: string
+        description: Evaluation provider ID.
+      weight:
+        type: number
+        format: float
+        minimum: 0
+        description: Weight of this benchmark.
+      primary_score:
+        $ref: ./PrimaryScore.yaml
+      pass_criteria:
+        $ref: ./PassCriteria.yaml
+      hardware_config:
+        $ref: ./BenchmarkHardwareConfig.yaml
+        description: |
+          Optional hardware profile override for this benchmark. Kubernetes runtimes
+          only; ignored by local runtimes.
+      parameters:
+        type: object
+        additionalProperties: true
+        description: Benchmark specific parameters.
+      test_data_ref:
+        $ref: ./TestDataRef.yaml
+        description: |
+          Optional external test data mounted at **`/test_data`** for **Kubernetes Job** runs.
+          Set **`s3`** to download objects via a pre-run init container, or **`pvc`** to mount
+          an existing PersistentVolumeClaim read-only with no init container. Omit if the
+          benchmark does not need mounted files.

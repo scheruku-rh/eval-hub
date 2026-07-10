@@ -22,7 +22,8 @@ if [[ ! -f "${EXE}" ]]; then
 fi
 
 # This assumes that the service has already been built
-${EXE} > ${LOGFILE} 2>&1 &
+# Always run in local mode (CORS enabled)
+${EXE} --local > ${LOGFILE} 2>&1 &
 
 SERVICE_PID=$!
 

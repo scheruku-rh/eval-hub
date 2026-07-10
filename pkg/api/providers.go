@@ -1,17 +1,127 @@
 package api
 
-// Provider contains the configuration details for an evaluation provider.
+// AgentMetadata contains structured metadata for AI agent consumption at the provider level.
+type AgentMetadata struct {
+	Evaluates            []string `mapstructure:"evaluates" yaml:"evaluates" json:"evaluates,omitempty"`
+	RecommendedWhen      []string `mapstructure:"recommended_when" yaml:"recommended_when" json:"recommended_when,omitempty"`
+	TargetType           string   `mapstructure:"target_type" yaml:"target_type" json:"target_type,omitempty" validate:"omitempty,oneof=model agent inference_server"`
+	Summary              string   `mapstructure:"summary" yaml:"summary" json:"summary,omitempty" validate:"omitempty,max=200"`
+	Complements          []string `mapstructure:"complements" yaml:"complements" json:"complements,omitempty"`
+	Hints                []string `mapstructure:"hints" yaml:"hints" json:"hints,omitempty"`
+	ResultInterpretation []string `mapstructure:"result_interpretation" yaml:"result_interpretation" json:"result_interpretation,omitempty"`
+}
+
+// ScoreRange describes a score band with semantic meaning.
+type ScoreRange struct {
+	Range   string `mapstructure:"range" yaml:"range" json:"range" validate:"required"`
+	Meaning string `mapstructure:"meaning" yaml:"meaning" json:"meaning" validate:"required"`
+}
+
+// BenchmarkAgentMetadata contains agent metadata at the individual benchmark level.
+type BenchmarkAgentMetadata struct {
+	ResultInterpretation string       `mapstructure:"result_interpretation" yaml:"result_interpretation" json:"result_interpretation,omitempty"`
+	ScoreRanges          []ScoreRange `mapstructure:"score_ranges" yaml:"score_ranges" json:"score_ranges,omitempty" validate:"omitempty,dive"`
+}
+
+type BenchmarkResource struct {
+	ID           string                  `mapstructure:"id" yaml:"id" json:"id"`
+	URL          string                  `mapstructure:"url" yaml:"url" json:"url,omitempty"`
+	Name         string                  `mapstructure:"name" yaml:"name" json:"name"`
+	Description  string                  `mapstructure:"description" yaml:"description" json:"description,omitempty" validate:"omitempty,max=1024,min=1"`
+	Category     string                  `mapstructure:"category" yaml:"category" json:"category"`
+	Metrics      []string                `mapstructure:"metrics" yaml:"metrics" json:"metrics,omitempty"`
+	NumFewShot   int                     `mapstructure:"num_few_shot" yaml:"num_few_shot" json:"num_few_shot"`
+	DatasetSize  int                     `mapstructure:"dataset_size" yaml:"dataset_size" json:"dataset_size"`
+	Tags         []string                `mapstructure:"tags" yaml:"tags" json:"tags,omitempty"`
+	PrimaryScore *PrimaryScore           `mapstructure:"primary_score" yaml:"primary_score" json:"primary_score,omitempty"`
+	PassCriteria *PassCriteria           `mapstructure:"pass_criteria" yaml:"pass_criteria" json:"pass_criteria,omitempty" validate:"omitempty"`
+	Agent        *BenchmarkAgentMetadata `mapstructure:"agent" yaml:"agent" json:"agent,omitempty"`
+}
+
+type ProviderConfig struct {
+	Name        string              `mapstructure:"name" yaml:"name" json:"name"`
+	Description string              `mapstructure:"description" yaml:"description" json:"description,omitempty" validate:"omitempty,max=1024,min=1"`
+	Title       string              `mapstructure:"title" yaml:"title" json:"title"`
+	Tags        []string            `mapstructure:"tags" yaml:"tags" json:"tags,omitempty" validate:"omitempty,dive,tagname"`
+	Benchmarks  []BenchmarkResource `mapstructure:"benchmarks" yaml:"benchmarks" json:"benchmarks" validate:"dive"`
+	Runtime     *Runtime            `mapstructure:"runtime" yaml:"runtime" json:"runtime,omitempty"`
+	Agent       *AgentMetadata      `mapstructure:"agent" yaml:"agent" json:"agent,omitempty"`
+}
+
 type ProviderResource struct {
-	ProviderID   string              `mapstructure:"provider_id" yaml:"provider_id" json:"provider_id"`
-	ProviderName string              `mapstructure:"provider_name" yaml:"provider_name" json:"provider_name"`
-	Description  string              `mapstructure:"description" yaml:"description" json:"description"`
-	ProviderType string              `mapstructure:"provider_type" yaml:"provider_type" json:"provider_type"`
-	BaseURL      *string             `mapstructure:"base_url" yaml:"base_url" json:"base_url"`
-	Benchmarks   []BenchmarkResource `mapstructure:"benchmarks" yaml:"benchmarks" json:"benchmarks"`
+	Resource Resource `json:"resource"`
+	ProviderConfig
+}
+
+type Runtime struct {
+	K8s   *K8sRuntime   `mapstructure:"k8s" yaml:"k8s" json:"k8s,omitempty"`
+	Local *LocalRuntime `mapstructure:"local" yaml:"local" json:"local,omitempty"`
+}
+
+// GPUConfig declares the GPU resources required by an adapter.
+// Resource is the Kubernetes extended resource name (e.g. "nvidia.com/gpu", "amd.com/gpu").
+// When Resource is omitted, no specific GPU resource is requested in the pod spec —
+// node selection is left to Kueue ResourceFlavors or cluster defaults.
+// Count is the number of GPU units to request; must be ≥ 1 when GPU is specified.
+//
+// Kubernetes requires requests == limits for GPU extended resources, so both are set to Count.
+// When GPU is nil or Count is 0 the adapter is scheduled as CPU-only.
+//
+// NodeSelector is an optional map of node label key→value pairs added to the evaluation pod
+// to target a specific GPU model or node pool (e.g. {"nvidia.com/gpu.product": "NVIDIA-H100-SXM5-80GB"}).
+// NodeSelector is ignored when the evaluation job is submitted with a queue — in that case
+// Kueue's ResourceFlavors govern node selection.
+type GPUConfig struct {
+	Resource     string            `mapstructure:"resource" yaml:"resource" json:"resource,omitempty"`
+	Count        int               `mapstructure:"count" yaml:"count" json:"count"`
+	NodeSelector map[string]string `mapstructure:"node_selector" yaml:"node_selector" json:"node_selector,omitempty"`
+}
+
+// ProviderRuntime contains runtime configuration for Kubernetes jobs.
+//
+// Example YAML for provider configs:
+//
+//	runtime:
+//	  image: "quay.io/evalhub/adapter:latest"
+//	  entrypoint:
+//	    - "/path/to/program"
+//	  cpu_request: "250m"
+//	  memory_request: "512Mi"
+//	  cpu_limit: "1"
+//	  memory_limit: "2Gi"
+//	  gpu:
+//	    resource: nvidia.com/gpu         # omit to leave GPU resource unspecified (any GPU)
+//	    count: 1
+//	    node_selector:                   # optional; ignored when a queue is specified
+//	      nvidia.com/gpu.product: NVIDIA-H100-SXM5-80GB
+//	  default_env:
+//	    - name: FOO
+//	      value: "bar"
+//	  image_pull_policy: if_not_present  # optional; if_not_present (default) or always
+type K8sRuntime struct {
+	Image         string   `mapstructure:"image" yaml:"image"`
+	Entrypoint    []string `mapstructure:"entrypoint" yaml:"entrypoint"`
+	CPURequest    string   `mapstructure:"cpu_request" yaml:"cpu_request"`
+	MemoryRequest string   `mapstructure:"memory_request" yaml:"memory_request"`
+	CPULimit      string   `mapstructure:"cpu_limit" yaml:"cpu_limit"`
+	MemoryLimit   string   `mapstructure:"memory_limit" yaml:"memory_limit"`
+	// GPU declares the GPU resource requirement for this adapter. Omit entirely for CPU-only
+	// adapters — existing adapters are unaffected.
+	GPU *GPUConfig `mapstructure:"gpu" yaml:"gpu" json:"gpu,omitempty"`
+	Env []EnvVar   `mapstructure:"env" yaml:"env"`
+	// ImagePullPolicy controls when the adapter container image is pulled.
+	// API values: if_not_present (default when omitted) or always. Mapped to Kubernetes
+	// PullIfNotPresent / PullAlways on the adapter container only; sidecar/init are fixed.
+	ImagePullPolicy string `mapstructure:"image_pull_policy" yaml:"image_pull_policy,omitempty" json:"image_pull_policy,omitempty" validate:"omitempty,oneof=if_not_present always"`
+}
+
+type LocalRuntime struct {
+	Command string   `mapstructure:"command" yaml:"command" json:"command,omitempty"`
+	Env     []EnvVar `mapstructure:"env" yaml:"env" json:"env,omitempty"`
 }
 
 // ProviderResourceList represents response for listing providers
 type ProviderResourceList struct {
-	TotalCount int                `json:"total_count"`
-	Items      []ProviderResource `json:"items,omitempty"`
+	Page
+	Items []ProviderResource `json:"items"`
 }

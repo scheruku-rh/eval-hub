@@ -1,0 +1,292 @@
+post:
+  tags:
+    - Evaluations
+  summary: Create Evaluation
+  description: Create and execute evaluation request using the simplified benchmark schema.
+  operationId: post_evaluations_jobs
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas/EvaluationJobConfig.yaml
+        examples:
+          CreateEvaluationWithBenchmarks:
+            summary: Evaluate a model with inline benchmarks
+            value:
+              name: "granite-3.1-8b-safety-eval"
+              description: "Safety and reasoning evaluation for Granite 3.1 8B Instruct"
+              tags:
+                - nightly
+                - granite
+              model:
+                url: "http://llm-service.models.svc.cluster.local:8000/v1"
+                name: "granite-3.1-8b-instruct"
+              benchmarks:
+                - id: "arc_easy"
+                  provider_id: "lm_evaluation_harness"
+                  weight: 0.6
+                  primary_score:
+                    metric: "acc_norm"
+                    lower_is_better: false
+                  pass_criteria:
+                    threshold: 0.25
+                  parameters:
+                    num_fewshot: 0
+                    limit: 100
+                - id: "owasp_llm_top10"
+                  provider_id: "garak"
+                  weight: 0.4
+                  primary_score:
+                    metric: "attack_success_rate"
+                    lower_is_better: true
+                  pass_criteria:
+                    threshold: 0.3
+              pass_criteria:
+                threshold: 0.5
+          CreateEvaluationWithCollection:
+            summary: Evaluate a model using a benchmark collection
+            value:
+              name: "llama-3.2-standard-eval"
+              description: "Standard evaluation suite for Llama 3.2 3B"
+              tags:
+                - release-candidate
+              model:
+                url: "http://llm-service.models.svc.cluster.local:8000/v1"
+                name: "llama-3.2-3b"
+              collection:
+                id: "standard-safety-collection"
+              pass_criteria:
+                threshold: 0.5
+          CreateEvaluationWithAuthAndQueue:
+            summary: Evaluate an authenticated model with Kueue scheduling
+            value:
+              name: "granite-3.1-8b-gpu-eval"
+              description: "GPU-scheduled evaluation with model authentication"
+              tags:
+                - gpu
+                - kueue
+              model:
+                url: "http://llm-service.models.svc.cluster.local:8000/v1"
+                name: "granite-3.1-8b-instruct"
+                auth:
+                  secret_ref: "llm-api-key"
+              benchmarks:
+                - id: "arc_easy"
+                  provider_id: "lm_evaluation_harness"
+                  parameters:
+                    num_fewshot: 0
+                    limit: 100
+              pass_criteria:
+                threshold: 0.5
+              queue:
+                kind: "kueue"
+                name: "gpu-local-queue"
+          CreateEvaluationWithExperiment:
+            summary: Evaluate with MLFlow experiment tracking
+            value:
+              name: "llama-3.2-nightly-eval"
+              description: "Nightly evaluation tracked in MLFlow"
+              tags:
+                - nightly
+                - mlflow
+              model:
+                url: "http://llm-service.models.svc.cluster.local:8000/v1"
+                name: "llama-3.2-3b"
+              benchmarks:
+                - id: "arc_easy"
+                  provider_id: "lm_evaluation_harness"
+                  weight: 0.6
+                  primary_score:
+                    metric: "acc_norm"
+                    lower_is_better: false
+                  parameters:
+                    num_fewshot: 0
+                - id: "owasp_llm_top10"
+                  provider_id: "garak"
+                  weight: 0.4
+                  primary_score:
+                    metric: "attack_success_rate"
+                    lower_is_better: true
+              pass_criteria:
+                threshold: 0.5
+              experiment:
+                name: "nightly-eval-experiment"
+                tags:
+                  - key: "team"
+                    value: "model-evaluation"
+                  - key: "pipeline"
+                    value: "nightly"
+  responses:
+    '202':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EvaluationJobResource.yaml
+          examples:
+            response:
+              summary: Evaluation job accepted and queued
+              value:
+                resource:
+                  id: "a1b2c3d4-5678-9abc-def0-1234567890ab"
+                  tenant: "default"
+                  created_at: "2026-01-15T09:30:00Z"
+                  updated_at: "2026-01-15T09:30:00Z"
+                  owner: "user@example.com"
+                status:
+                  state: "pending"
+                  message:
+                    message: "Evaluation job created."
+                    message_code: "evaluation_job_created"
+                name: "granite-3.1-8b-safety-eval"
+                description: "Safety and reasoning evaluation for Granite 3.1 8B Instruct"
+                tags:
+                  - nightly
+                  - granite
+                model:
+                  url: "http://llm-service.models.svc.cluster.local:8000/v1"
+                  name: "granite-3.1-8b-instruct"
+                benchmarks:
+                  - id: "arc_easy"
+                    provider_id: "lm_evaluation_harness"
+                    weight: 0.6
+                    primary_score:
+                      metric: "acc_norm"
+                      lower_is_better: false
+                    pass_criteria:
+                      threshold: 0.25
+                    parameters:
+                      num_fewshot: 0
+                      limit: 100
+                  - id: "owasp_llm_top10"
+                    provider_id: "garak"
+                    weight: 0.4
+                    primary_score:
+                      metric: "attack_success_rate"
+                      lower_is_better: true
+                    pass_criteria:
+                      threshold: 0.3
+                pass_criteria:
+                  threshold: 0.5
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml
+get:
+  tags:
+    - Evaluations
+  summary: List Evaluations
+  description: List all evaluation requests.
+  operationId: get_evaluations_jobs
+  parameters:
+    - name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        maximum: 100
+        minimum: 1
+        description: Maximum number of evaluations to return
+        default: 50
+        title: Limit
+      description: Maximum number of evaluations to return
+    - name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        description: Offset for pagination
+        default: 0
+        title: Offset
+      description: Offset for pagination
+    - name: status
+      in: query
+      required: false
+      schema:
+        type: string
+        description: Filter by status
+        title: Status Filter
+      description: Filter by status
+    - name: name
+      in: query
+      required: false
+      schema:
+        type: string
+        title: Name
+      description: Name to search for
+    - name: tags
+      in: query
+      required: false
+      schema:
+        type: string
+        title: Tags
+      description: Tags to search for
+  responses:
+    '200':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/EvaluationJobResourceList.yaml
+          examples:
+            response:
+              summary: Paginated list of evaluation jobs
+              value:
+                first:
+                  href: "/api/v1/evaluations/jobs?limit=50&offset=0"
+                next:
+                  href: "/api/v1/evaluations/jobs?limit=50&offset=50"
+                limit: 50
+                total_count: 73
+                items:
+                  - resource:
+                      id: "a1b2c3d4-5678-9abc-def0-1234567890ab"
+                      tenant: "default"
+                      created_at: "2026-01-15T09:30:00Z"
+                      updated_at: "2026-01-15T09:42:15Z"
+                      owner: "user@example.com"
+                    status:
+                      state: "completed"
+                      message:
+                        message: "Evaluation job completed."
+                        message_code: "evaluation_job_updated"
+                    results:
+                      benchmarks:
+                        - id: "arc_easy"
+                          provider_id: "lm_evaluation_harness"
+                          benchmark_index: 0
+                          metrics:
+                            acc: 0.82
+                            acc_norm: 0.85
+                          test:
+                            primary_score: 0.85
+                            threshold: 0.25
+                            pass: true
+                      test:
+                        score: 0.85
+                        threshold: 0.5
+                        pass: true
+                    name: "granite-3.1-8b-safety-eval"
+                    model:
+                      url: "http://llm-service.models.svc.cluster.local:8000/v1"
+                      name: "granite-3.1-8b-instruct"
+                    benchmarks:
+                      - id: "arc_easy"
+                        provider_id: "lm_evaluation_harness"
+                        weight: 0.6
+                    pass_criteria:
+                      threshold: 0.5
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml

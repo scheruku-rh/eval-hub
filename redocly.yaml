@@ -1,0 +1,16 @@
+extends:
+  - recommended
+
+apis:
+  internal@latest:
+    root: ./docs/src/openapi.yaml
+  external@latest:
+    root: ./docs/src/openapi.yaml
+    decorators:
+      remove-x-internal: on
+
+rules:
+  # Allow localhost/example.org in server URLs for local and example docs
+  no-server-example.com: off
+  # Allow unused components (e.g. Benchmark) for future use or reference
+  no-unused-components: off

@@ -1,0 +1,9 @@
+type: object
+description: Pass/fail threshold criteria.
+properties:
+  threshold:
+    type: number
+    format: float
+    description: Threshold value.
+required:
+  - threshold

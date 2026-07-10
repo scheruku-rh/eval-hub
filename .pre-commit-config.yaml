@@ -1,56 +1,40 @@
 # Pre-commit configuration for eval-hub
 repos:
-  # Ruff linting and formatting (replaces black)
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.6
-    hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-        exclude: ^examples/api_examples\.ipynb$
-      - id: ruff-format
-        exclude: ^examples/api_examples\.ipynb$
-
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        exclude: (\.ipynb$|^docs/.*\.(html|json)$)
       - id: end-of-file-fixer
+        exclude: (\.ipynb$|^docs/.*\.(html|json)$)
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-json
-        exclude: ^examples/api_examples\.ipynb$
+        exclude: (\.ipynb$|^\.vscode/)
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=1000]
       - id: debug-statements
+      # prevent committing to main branch for admins
+      - id: no-commit-to-branch
+        args: [--branch, main]
+        stages: [pre-push]
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.16.4
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
 
   # Local checks
   - repo: local
     hooks:
-      - id: mypy-check
-        name: mypy type checking
-        #  run with uv
-        entry: uv
-        args: [run, mypy, src/]
-        language: system
-        types: [python]
-        pass_filenames: false
-
-      - id: pytest-unit
-        name: unit tests
-        #  run with uv
-        entry: uv
-        args: [run, pytest, tests/, -m, "unit", --tb=short, -q]
-        language: system
-        types: [python]
-        pass_filenames: false
-
       - id: go-test
-        name: go unit and FVT tests
+        name: go unit and integration tests
         entry: make
-        args: [clean, build, test-all]
+        args: [test, test-fvt]
         language: system
         types: [go]
         pass_filenames: false

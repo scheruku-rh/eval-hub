@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-job-lm-evaluation-harness-mmlu-001-405ef22a
+  namespace: evalhub
+  labels:
+    app: "evalhub"
+    component: "evaluation-job"
+    job_id: "001"
+    provider_id: "lm_evaluation_harness"
+    benchmark_id: "mmlu"
+    benchmark_index: "0"
+    evalhub_instance_name: "evalhub"
+    evalhub_instance_namespace: "evalhub"
+  annotations:
+    eval-hub.github.io/job_id: "001"
+    eval-hub.github.io/provider_id: "lm_evaluation_harness"
+    eval-hub.github.io/benchmark_id: "mmlu"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: "evalhub"
+        component: "evaluation-job"
+        job_id: "001"
+        provider_id: "lm_evaluation_harness"
+        benchmark_id: "mmlu"
+        benchmark_index: "0"
+        evalhub_instance_name: "evalhub"
+        evalhub_instance_namespace: "evalhub"
+      annotations:
+        eval-hub.github.io/job_id: "001"
+        eval-hub.github.io/provider_id: "lm_evaluation_harness"
+        eval-hub.github.io/benchmark_id: "mmlu"
+    spec:
+      serviceAccountName: evalhub-default-job
+      restartPolicy: Never
+      initContainers:
+        - name: sidecar
+          image: eval-runtime-sidecar:latest
+          restartPolicy: Always
+          # Startup probe: max startup time = failureThreshold × periodSeconds = 30 × 2 = 60s
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 30
+            periodSeconds: 2
+          volumeMounts:
+            - name: job-spec
+              mountPath: /meta/job.json
+              subPath: job.json
+              readOnly: true
+            - name: job-spec
+              mountPath: /meta/sidecar_config.json
+              subPath: sidecar_config.json
+              readOnly: true
+            - name: termination-file-volume
+              mountPath: /shared
+      containers:
+        - name: adapter
+          image: quay.io/evalhub/adapter:latest
+          imagePullPolicy: IfNotPresent
+          command: []
+          env: []
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - "ALL"
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: job-spec
+              mountPath: /meta/job.json
+              subPath: job.json
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: evalhub-service-ca
+              mountPath: /etc/pki/ca-trust/source/anchors
+              readOnly: true
+            - name: termination-file-volume
+              mountPath: /shared
+      volumes:
+        - name: job-spec
+          configMap:
+            name: eval-job-lm-evaluation-harness-mmlu-001-405ef22a-spec
+        - name: data
+          emptyDir: {}
+        - name: evalhub-service-ca
+          configMap:
+            name: evalhub-service-ca
+        - name: termination-file-volume
+          emptyDir: {}

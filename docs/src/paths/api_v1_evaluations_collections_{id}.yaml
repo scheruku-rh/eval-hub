@@ -1,0 +1,345 @@
+get:
+  tags:
+    - Collections
+  summary: Get Collection
+  description: Get details of a specific collection.
+  operationId: get_collections_id
+  parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        title: Collection Id
+  responses:
+    '200':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CollectionResource.yaml
+          examples:
+            response:
+              summary: Safety evaluation collection with benchmarks
+              value:
+                resource:
+                  id: "e5f6a7b8-9012-3456-cdef-0123456789ab"
+                  tenant: "default"
+                  created_at: "2025-12-01T10:00:00Z"
+                  updated_at: "2025-12-01T10:00:00Z"
+                name: "llm-safety-suite"
+                category: "safety"
+                description: "Comprehensive safety evaluation combining reasoning accuracy and vulnerability scanning"
+                tags:
+                  - safety
+                  - nightly
+                pass_criteria:
+                  threshold: 0.5
+                benchmarks:
+                  - id: "arc_easy"
+                    provider_id: "lm_evaluation_harness"
+                    weight: 0.6
+                    primary_score:
+                      metric: "acc_norm"
+                      lower_is_better: false
+                    pass_criteria:
+                      threshold: 0.25
+                  - id: "owasp_llm_top10"
+                    provider_id: "garak"
+                    weight: 0.4
+                    primary_score:
+                      metric: "attack_success_rate"
+                      lower_is_better: true
+                    pass_criteria:
+                      threshold: 0.3
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml
+put:
+  tags:
+    - Collections
+  summary: Update Collection
+  description: Update an existing collection.
+  operationId: put_collections_id
+  parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        title: Collection Id
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas/CollectionConfig.yaml
+        examples:
+          request:
+            summary: Update collection to add a quality benchmark
+            value:
+              name: "llm-safety-suite"
+              category: "safety"
+              description: "Safety evaluation with reasoning, OWASP risks, and content quality"
+              tags:
+                - safety
+                - nightly
+                - updated
+              pass_criteria:
+                threshold: 0.5
+              benchmarks:
+                - id: "arc_easy"
+                  provider_id: "lm_evaluation_harness"
+                  weight: 0.5
+                  primary_score:
+                    metric: "acc_norm"
+                    lower_is_better: false
+                  pass_criteria:
+                    threshold: 0.25
+                - id: "owasp_llm_top10"
+                  provider_id: "garak"
+                  weight: 0.3
+                  primary_score:
+                    metric: "attack_success_rate"
+                    lower_is_better: true
+                  pass_criteria:
+                    threshold: 0.3
+                - id: "quality"
+                  provider_id: "garak"
+                  weight: 0.2
+                  primary_score:
+                    metric: "attack_success_rate"
+                    lower_is_better: true
+                  pass_criteria:
+                    threshold: 0.3
+          UpdateWithDifferentProviders:
+            summary: Revise collection with benchmarks from multiple providers
+            value:
+              name: "llm-safety-suite"
+              category: "safety"
+              description: "Revised safety suite with lm-eval and Garak benchmarks"
+              tags:
+                - safety
+                - nightly
+              pass_criteria:
+                threshold: 0.5
+              benchmarks:
+                - id: "arc_easy"
+                  provider_id: "lm_evaluation_harness"
+                  weight: 0.4
+                  primary_score:
+                    metric: "acc_norm"
+                    lower_is_better: false
+                  pass_criteria:
+                    threshold: 0.25
+                - id: "blimp"
+                  provider_id: "lm_evaluation_harness"
+                  weight: 0.2
+                  primary_score:
+                    metric: "acc"
+                    lower_is_better: false
+                  pass_criteria:
+                    threshold: 0.25
+                - id: "owasp_llm_top10"
+                  provider_id: "garak"
+                  weight: 0.4
+                  primary_score:
+                    metric: "attack_success_rate"
+                    lower_is_better: true
+                  pass_criteria:
+                    threshold: 0.3
+  responses:
+    '200':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CollectionResource.yaml
+          examples:
+            response:
+              summary: Updated collection with three benchmarks
+              value:
+                resource:
+                  id: "e5f6a7b8-9012-3456-cdef-0123456789ab"
+                  tenant: "default"
+                  created_at: "2025-12-01T10:00:00Z"
+                  updated_at: "2026-02-10T11:00:00Z"
+                name: "llm-safety-suite"
+                category: "safety"
+                description: "Safety evaluation with reasoning, OWASP risks, and content quality"
+                tags:
+                  - safety
+                  - nightly
+                  - updated
+                pass_criteria:
+                  threshold: 0.5
+                benchmarks:
+                  - id: "arc_easy"
+                    provider_id: "lm_evaluation_harness"
+                    weight: 0.5
+                    primary_score:
+                      metric: "acc_norm"
+                      lower_is_better: false
+                    pass_criteria:
+                      threshold: 0.25
+                  - id: "owasp_llm_top10"
+                    provider_id: "garak"
+                    weight: 0.3
+                    primary_score:
+                      metric: "attack_success_rate"
+                      lower_is_better: true
+                    pass_criteria:
+                      threshold: 0.3
+                  - id: "quality"
+                    provider_id: "garak"
+                    weight: 0.2
+                    primary_score:
+                      metric: "attack_success_rate"
+                      lower_is_better: true
+                    pass_criteria:
+                      threshold: 0.3
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml
+patch:
+  tags:
+    - Collections
+  summary: Patch Collection
+  description: Partially update an existing collection.
+  operationId: patch_collections_id
+  parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        title: Collection Id
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: array
+          title: Json Patch
+          description: JSON Patch operation
+          items:
+            $ref: ../components/schemas/PatchOperation.yaml
+        examples:
+          request:
+            summary: Raise the overall pass threshold
+            value:
+              - op: "replace"
+                path: "/pass_criteria/threshold"
+                value: 0.6
+              - op: "replace"
+                path: "/description"
+                value: "Safety evaluation with stricter pass threshold"
+          ReplaceBenchmark:
+            summary: Replace a benchmark in the collection
+            value:
+              - op: "replace"
+                path: "/benchmarks/0"
+                value:
+                  id: "avid"
+                  provider_id: "garak"
+                  weight: 0.5
+                  primary_score:
+                    metric: "attack_success_rate"
+                    lower_is_better: true
+                  pass_criteria:
+                    threshold: 0.3
+          UpdateNameAndTags:
+            summary: Rename collection and update tags
+            value:
+              - op: "replace"
+                path: "/name"
+                value: "llm-safety-suite-v2"
+              - op: "replace"
+                path: "/tags"
+                value:
+                  - safety
+                  - nightly
+                  - v2
+  responses:
+    '200':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/CollectionResource.yaml
+          examples:
+            response:
+              summary: Collection after raising the pass threshold
+              value:
+                resource:
+                  id: "e5f6a7b8-9012-3456-cdef-0123456789ab"
+                  tenant: "default"
+                  created_at: "2025-12-01T10:00:00Z"
+                  updated_at: "2026-02-10T12:30:00Z"
+                name: "llm-safety-suite"
+                category: "safety"
+                description: "Safety evaluation with stricter pass threshold"
+                tags:
+                  - safety
+                  - nightly
+                pass_criteria:
+                  threshold: 0.6
+                benchmarks:
+                  - id: "arc_easy"
+                    provider_id: "lm_evaluation_harness"
+                    weight: 0.6
+                    primary_score:
+                      metric: "acc_norm"
+                      lower_is_better: false
+                    pass_criteria:
+                      threshold: 0.25
+                  - id: "owasp_llm_top10"
+                    provider_id: "garak"
+                    weight: 0.4
+                    primary_score:
+                      metric: "attack_success_rate"
+                      lower_is_better: true
+                    pass_criteria:
+                      threshold: 0.3
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml
+delete:
+  tags:
+    - Collections
+  summary: Delete Collection
+  description: Delete a collection.
+  operationId: delete_collections_id
+  parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        title: Collection Id
+  responses:
+    '204':
+      description: Success
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml

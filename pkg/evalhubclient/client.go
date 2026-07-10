@@ -1,0 +1,655 @@
+package evalhubclient
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/eval-hub/eval-hub/pkg/api"
+)
+
+const (
+	defaultTimeout    = 30 * time.Second
+	defaultMaxRetries = 3
+	defaultRetryDelay = 500 * time.Millisecond
+
+	apiBasePath = "/api/v1/evaluations"
+	healthPath  = "/api/v1/health"
+
+	// maxLoggedBodyBytes caps JSON logged for request/response bodies (aligned with eval-hub handler visibility).
+	maxLoggedBodyBytes = 8192
+
+	// DefaultListPageLimit is the page size used for eval-hub list APIs when the caller
+	// does not set an explicit limit. evalhub-mcp applies this (configurable via list_page_limit).
+	DefaultListPageLimit = 200
+)
+
+// APIError represents a typed error returned by the eval-hub API.
+type APIError struct {
+	StatusCode int
+	Code       string
+	Message    string
+	Trace      string
+}
+
+func (e *APIError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("eval-hub API error (HTTP %d, code=%s): %s", e.StatusCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("eval-hub API error (HTTP %d): %s", e.StatusCode, e.Message)
+}
+
+func (e *APIError) IsNotFound() bool     { return e.StatusCode == http.StatusNotFound }
+func (e *APIError) IsUnauthorized() bool { return e.StatusCode == http.StatusUnauthorized }
+func (e *APIError) IsForbidden() bool    { return e.StatusCode == http.StatusForbidden }
+
+// Client is an HTTP client for the eval-hub REST API.
+// Construct via NewClient; use With* methods to configure auth, TLS, logging, and timeouts.
+//
+//	client := evalhub_client.NewClient("https://evalhub:8080").
+//	    WithToken(token).
+//	    WithTenant("my-namespace").
+//	    WithLogger(logger)
+type Client struct {
+	ctx        context.Context
+	baseURL    string
+	token      string
+	tenant     string
+	httpClient *http.Client
+	logger     *slog.Logger
+	maxRetries int
+	retryDelay time.Duration
+	// listPageLimit is the page size for provider listing when aggregating benchmarks
+	// (see allProviders). Zero means use DefaultListPageLimit.
+	listPageLimit int
+}
+
+// NewClient creates a new eval-hub API client. Trailing slashes in baseURL are stripped.
+func NewClient(baseURL string) *Client {
+	return &Client{
+		ctx:     context.Background(),
+		baseURL: strings.TrimRight(baseURL, "/"),
+		httpClient: &http.Client{
+			Timeout: defaultTimeout,
+		},
+		logger:     slog.New(slog.DiscardHandler),
+		maxRetries: defaultMaxRetries,
+		retryDelay: defaultRetryDelay,
+	}
+}
+
+// clone returns a new Client with every field explicitly copied.
+// All With* methods call this so that adding a field to Client forces
+// a compile-time update here rather than silently inheriting a zero value.
+func (c *Client) clone() *Client {
+	return &Client{
+		ctx:           c.ctx,
+		baseURL:       c.baseURL,
+		token:         c.token,
+		tenant:        c.tenant,
+		httpClient:    c.httpClient,
+		logger:        c.logger,
+		maxRetries:    c.maxRetries,
+		retryDelay:    c.retryDelay,
+		listPageLimit: c.listPageLimit,
+	}
+}
+
+// WithContext returns a copy of the client that uses ctx for all subsequent requests.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	cp := c.clone()
+	cp.ctx = ctx
+	return cp
+}
+
+// WithToken returns a copy of the client that sends token as a Bearer Authorization header.
+func (c *Client) WithToken(token string) *Client {
+	cp := c.clone()
+	cp.token = token
+	return cp
+}
+
+// WithTenant returns a copy of the client that sends the X-Tenant header on every request.
+func (c *Client) WithTenant(tenant string) *Client {
+	cp := c.clone()
+	cp.tenant = tenant
+	return cp
+}
+
+// WithLogger returns a copy of the client that uses logger for structured request logging.
+func (c *Client) WithLogger(logger *slog.Logger) *Client {
+	cp := c.clone()
+	cp.logger = logger
+	return cp
+}
+
+// WithTimeout returns a copy of the client with the given HTTP request timeout.
+func (c *Client) WithTimeout(timeout time.Duration) *Client {
+	cp := c.clone()
+	cp.httpClient = &http.Client{
+		Timeout:   timeout,
+		Transport: c.httpClient.Transport,
+	}
+	return cp
+}
+
+// WithInsecureSkipVerify returns a copy of the client that skips TLS certificate verification.
+// Use only in development or test environments.
+func (c *Client) WithInsecureSkipVerify() *Client {
+	cp := c.clone()
+
+	// http.Transport contains a sync.Mutex and cannot be copied by value, so we
+	// always build a fresh transport. We do carry over any existing TLSClientConfig
+	// via its own safe Clone() so caller-configured cipher suites etc. are kept.
+	var tlsCfg *tls.Config
+	if existing, ok := c.httpClient.Transport.(*http.Transport); ok && existing.TLSClientConfig != nil {
+		tlsCfg = existing.TLSClientConfig.Clone()
+	} else {
+		tlsCfg = &tls.Config{} //nolint:gosec
+	}
+	tlsCfg.InsecureSkipVerify = true // #nosec G402
+
+	cp.httpClient = &http.Client{
+		Timeout:   c.httpClient.Timeout,
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	}
+	return cp
+}
+
+// WithCACert returns a copy of the client that trusts the PEM-encoded CA certificate(s)
+// in pemData in addition to the system certificate pool. Use this to trust a cluster-internal
+// CA (e.g. the OpenShift service CA) without disabling all certificate verification.
+func (c *Client) WithCACert(pemData []byte) (*Client, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pemData) {
+		return nil, fmt.Errorf("no valid PEM certificate found in CA data")
+	}
+
+	var tlsCfg *tls.Config
+	if existing, ok := c.httpClient.Transport.(*http.Transport); ok && existing.TLSClientConfig != nil {
+		tlsCfg = existing.TLSClientConfig.Clone()
+	} else {
+		tlsCfg = &tls.Config{} //nolint:gosec
+	}
+	tlsCfg.RootCAs = pool
+
+	cp := c.clone()
+	cp.httpClient = &http.Client{
+		Timeout:   c.httpClient.Timeout,
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	}
+	return cp, nil
+}
+
+// WithMaxRetries returns a copy of the client that retries up to n times on transient failures.
+func (c *Client) WithMaxRetries(n int) *Client {
+	cp := c.clone()
+	cp.maxRetries = n
+	return cp
+}
+
+// WithRetryDelay returns a copy of the client with the given base delay between retries.
+// The actual delay doubles on each successive attempt (exponential backoff).
+func (c *Client) WithRetryDelay(d time.Duration) *Client {
+	cp := c.clone()
+	cp.retryDelay = d
+	return cp
+}
+
+// WithHTTPClient returns a copy of the client using the given http.Client (useful for testing).
+func (c *Client) WithHTTPClient(httpClient *http.Client) *Client {
+	cp := c.clone()
+	cp.httpClient = httpClient
+	return cp
+}
+
+// WithListPageLimit returns a copy of the client that uses n as the page size when listing
+// providers for benchmark discovery (allProviders). When n < 1, DefaultListPageLimit is used.
+func (c *Client) WithListPageLimit(n int) *Client {
+	cp := c.clone()
+	if n < 1 {
+		cp.listPageLimit = DefaultListPageLimit
+	} else {
+		cp.listPageLimit = n
+	}
+	return cp
+}
+
+func (c *Client) effectiveListPageLimit() int {
+	if c.listPageLimit > 0 {
+		return c.listPageLimit
+	}
+	return DefaultListPageLimit
+}
+
+func truncateBodyForLog(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	if len(b) <= maxLoggedBodyBytes {
+		return string(b)
+	}
+	return string(b[:maxLoggedBodyBytes]) + "… (truncated)"
+}
+
+func (c *Client) effectiveLogger() *slog.Logger {
+	if log := LoggerFromContext(c.ctx); log != nil {
+		return log
+	}
+	return c.logger
+}
+
+// shouldLogBody returns true if the body should be logged based on the logger level (DEBUG level) and the body length (greater than zero).
+func (c *Client) shouldLogBody(b []byte) bool {
+	return c.effectiveLogger().Enabled(c.ctx, slog.LevelDebug) && (len(b) > 0)
+}
+
+func (c *Client) logEvalHubRequestStarted(method, fullURL string, bodyBytes []byte) {
+	args := []any{"method", method, "uri", fullURL}
+	if c.tenant != "" {
+		args = append(args, "tenant", c.tenant)
+	}
+	if c.shouldLogBody(bodyBytes) {
+		args = append(args, "request", truncateBodyForLog(bodyBytes))
+	}
+	c.effectiveLogger().Info("Request started", args...)
+}
+
+func (c *Client) logEvalHubRequestFailed(start time.Time, code int, errMsg string, respBody []byte) {
+	args := []any{"error", errMsg, "code", code, "duration", time.Since(start)}
+	if c.shouldLogBody(respBody) {
+		args = append(args, "response", truncateBodyForLog(respBody))
+	}
+	c.effectiveLogger().Info("Request failed", args...)
+}
+
+func (c *Client) logEvalHubRequestSuccessful(start time.Time, code int, respBody []byte) {
+	args := []any{"code", code, "duration", time.Since(start)}
+	if c.shouldLogBody(respBody) {
+		args = append(args, "response", truncateBodyForLog(respBody))
+	}
+	c.effectiveLogger().Info("Request successful", args...)
+}
+
+func (c *Client) setHeaders(req *http.Request) {
+	if req.Body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if req.Method != http.MethodDelete {
+		req.Header.Set("Accept", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.tenant != "" {
+		req.Header.Set("X-Tenant", c.tenant)
+	}
+	if id := RequestIDFromContext(c.ctx); id != "" {
+		req.Header.Set(TransactionIDHeader, id)
+	}
+}
+
+// doRequest executes an HTTP request, retrying on network failures and 5xx responses.
+// Returns the response body, HTTP status code, and any error.
+func (c *Client) doRequest(method, path string, body any, queryParams url.Values) ([]byte, int, error) {
+	fullURL := c.baseURL + path
+	if len(queryParams) > 0 {
+		fullURL += "?" + queryParams.Encode()
+	}
+
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+	}
+
+	start := time.Now()
+	c.logEvalHubRequestStarted(method, fullURL, bodyBytes)
+
+	var (
+		respBody   []byte
+		statusCode int
+		lastErr    error
+	)
+
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(1<<(attempt-1)) * c.retryDelay)
+		}
+
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewBuffer(bodyBytes)
+		}
+
+		req, err := http.NewRequestWithContext(c.ctx, method, fullURL, reqBody)
+		if err != nil {
+			wrapped := fmt.Errorf("failed to create request: %w", err)
+			c.logEvalHubRequestFailed(start, 0, wrapped.Error(), nil)
+			return nil, 0, wrapped
+		}
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request failed: %w", err)
+			if attempt < c.maxRetries {
+				c.effectiveLogger().Warn("eval-hub request failed, retrying", "method", method, "path", path, "attempt", attempt+1, "error", err)
+				continue
+			}
+			c.logEvalHubRequestFailed(start, 0, lastErr.Error(), nil)
+			return nil, 0, lastErr
+		}
+
+		statusCode = resp.StatusCode
+		respBody, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			wrapped := fmt.Errorf("failed to read response body: %w", err)
+			c.logEvalHubRequestFailed(start, statusCode, wrapped.Error(), nil)
+			return nil, statusCode, wrapped
+		}
+
+		// Retry server errors; propagate client errors immediately.
+		if statusCode >= 500 && attempt < c.maxRetries {
+			c.effectiveLogger().Warn("eval-hub server error, retrying", "method", method, "path", path, "status", statusCode, "attempt", attempt+1)
+			lastErr = c.parseAPIError(statusCode, respBody)
+			continue
+		}
+
+		lastErr = nil
+		break
+	}
+
+	if lastErr != nil {
+		c.logEvalHubRequestFailed(start, statusCode, lastErr.Error(), respBody)
+		return nil, statusCode, lastErr
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		apiErr := c.parseAPIError(statusCode, respBody)
+		c.logEvalHubRequestFailed(start, statusCode, apiErr.Error(), respBody)
+		return nil, statusCode, apiErr
+	}
+
+	c.logEvalHubRequestSuccessful(start, statusCode, respBody)
+	return respBody, statusCode, nil
+}
+
+func (c *Client) parseAPIError(statusCode int, body []byte) *APIError {
+	apiErr := &APIError{StatusCode: statusCode}
+	if len(body) > 0 {
+		var errResp api.Error
+		if err := json.Unmarshal(body, &errResp); err == nil {
+			apiErr.Code = errResp.MessageCode
+			apiErr.Message = errResp.Message
+			apiErr.Trace = errResp.Trace
+		}
+	}
+	if apiErr.Message == "" {
+		apiErr.Message = http.StatusText(statusCode)
+	}
+	return apiErr
+}
+
+func decode[T any](body []byte) (*T, error) {
+	var result T
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *Client) logTruncatedListPage(endpoint string, page api.Page) {
+	if page.Limit <= 0 {
+		return
+	}
+	if page.TotalCount > page.Limit {
+		c.effectiveLogger().Error("eval-hub list response has more items than returned on this page (total_count > limit); fetch additional pages with offset if needed",
+			"endpoint", endpoint,
+			"total_count", page.TotalCount,
+			"limit", page.Limit,
+		)
+	}
+}
+
+// ─── Health ──────────────────────────────────────────────────────────────────
+
+// GetHealth returns the current health status of the eval-hub service.
+func (c *Client) GetHealth() (*api.HealthResponse, error) {
+	body, _, err := c.doRequest(http.MethodGet, healthPath, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[api.HealthResponse](body)
+}
+
+// ─── Providers ───────────────────────────────────────────────────────────────
+
+// ListProviders returns all registered evaluation providers. Use WithLimit/WithOffset for pagination.
+func (c *Client) ListProviders(opts ...ListOption) (*api.ProviderResourceList, error) {
+	return c.fetchProviderList(opts, true)
+}
+
+func (c *Client) fetchProviderList(opts []ListOption, logTruncation bool) (*api.ProviderResourceList, error) {
+	body, _, err := c.doRequest(http.MethodGet, apiBasePath+"/providers", nil, applyListOptions(opts))
+	if err != nil {
+		return nil, err
+	}
+	list, err := decode[api.ProviderResourceList](body)
+	if err != nil {
+		return nil, err
+	}
+	if logTruncation {
+		c.logTruncatedListPage(apiBasePath+"/providers", list.Page)
+	}
+	return list, nil
+}
+
+// GetProvider returns the provider with the given ID.
+func (c *Client) GetProvider(id string) (*api.ProviderResource, error) {
+	body, _, err := c.doRequest(http.MethodGet, apiBasePath+"/providers/"+url.PathEscape(id), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[api.ProviderResource](body)
+}
+
+// ─── Benchmarks ──────────────────────────────────────────────────────────────
+//
+// Benchmarks are nested within providers (no dedicated /benchmarks endpoint).
+// These helpers aggregate across all provider pages automatically.
+
+// ListBenchmarks returns all benchmarks across all registered providers.
+func (c *Client) ListBenchmarks() ([]api.BenchmarkResource, error) {
+	return c.listAllBenchmarks(nil)
+}
+
+// GetBenchmark searches all providers for a benchmark with the given ID.
+// Returns an APIError with HTTP 404 if no match is found.
+func (c *Client) GetBenchmark(id string) (*api.BenchmarkResource, error) {
+	providers, err := c.allProviders()
+	if err != nil {
+		return nil, err
+	}
+	for i := range providers {
+		for j := range providers[i].Benchmarks {
+			if providers[i].Benchmarks[j].ID == id {
+				b := providers[i].Benchmarks[j]
+				return &b, nil
+			}
+		}
+	}
+	return nil, &APIError{
+		StatusCode: http.StatusNotFound,
+		Message:    fmt.Sprintf("benchmark %q not found", id),
+	}
+}
+
+// ListBenchmarksByLabel returns benchmarks whose tags contain all of the given labels.
+func (c *Client) ListBenchmarksByLabel(labels []string) ([]api.BenchmarkResource, error) {
+	return c.listAllBenchmarks(labels)
+}
+
+// allProviders fetches every provider page and returns the combined slice.
+func (c *Client) allProviders() ([]api.ProviderResource, error) {
+	pageSize := c.effectiveListPageLimit()
+	var all []api.ProviderResource
+	for offset := 0; ; offset += pageSize {
+		list, err := c.fetchProviderList([]ListOption{WithLimit(pageSize), WithOffset(offset)}, false)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, list.Items...)
+		if len(all) >= list.TotalCount || len(list.Items) < pageSize {
+			break
+		}
+	}
+	return all, nil
+}
+
+func (c *Client) listAllBenchmarks(labels []string) ([]api.BenchmarkResource, error) {
+	providers, err := c.allProviders()
+	if err != nil {
+		return nil, err
+	}
+	var benchmarks []api.BenchmarkResource
+	for _, p := range providers {
+		for _, b := range p.Benchmarks {
+			if matchesAllLabels(b.Tags, labels) {
+				benchmarks = append(benchmarks, b)
+			}
+		}
+	}
+	return benchmarks, nil
+}
+
+// matchesAllLabels returns true when tags contains every element of required.
+func matchesAllLabels(tags, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	tagSet := make(map[string]struct{}, len(tags))
+	for _, t := range tags {
+		tagSet[t] = struct{}{}
+	}
+	for _, l := range required {
+		if _, ok := tagSet[l]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// ─── Collections ─────────────────────────────────────────────────────────────
+
+// ListCollections returns all benchmark collections. Use WithLimit/WithOffset for pagination.
+func (c *Client) ListCollections(opts ...ListOption) (*api.CollectionResourceList, error) {
+	body, _, err := c.doRequest(http.MethodGet, apiBasePath+"/collections", nil, applyListOptions(opts))
+	if err != nil {
+		return nil, err
+	}
+	list, err := decode[api.CollectionResourceList](body)
+	if err != nil {
+		return nil, err
+	}
+	c.logTruncatedListPage(apiBasePath+"/collections", list.Page)
+	return list, nil
+}
+
+// GetCollection returns the collection with the given ID.
+func (c *Client) GetCollection(id string) (*api.CollectionResource, error) {
+	body, _, err := c.doRequest(http.MethodGet, apiBasePath+"/collections/"+url.PathEscape(id), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[api.CollectionResource](body)
+}
+
+// ─── Evaluation Jobs ──────────────────────────────────────────────────────────
+
+// ListJobs returns all evaluation jobs. Use WithLimit/WithOffset for pagination.
+func (c *Client) ListJobs(opts ...ListOption) (*api.EvaluationJobResourceList, error) {
+	body, _, err := c.doRequest(http.MethodGet, apiBasePath+"/jobs", nil, applyListOptions(opts))
+	if err != nil {
+		return nil, err
+	}
+	list, err := decode[api.EvaluationJobResourceList](body)
+	if err != nil {
+		return nil, err
+	}
+	c.logTruncatedListPage(apiBasePath+"/jobs", list.Page)
+	return list, nil
+}
+
+// GetJob returns the evaluation job with the given ID.
+func (c *Client) GetJob(id string) (*api.EvaluationJobResource, error) {
+	body, _, err := c.doRequest(http.MethodGet, apiBasePath+"/jobs/"+url.PathEscape(id), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[api.EvaluationJobResource](body)
+}
+
+// ListJobsByStatus returns all evaluation jobs in the given state.
+func (c *Client) ListJobsByStatus(status api.OverallState, opts ...ListOption) (*api.EvaluationJobResourceList, error) {
+	opts = append(opts, withRawParam("status", string(status)))
+	return c.ListJobs(opts...)
+}
+
+// CreateJob submits a new evaluation job and returns the created resource.
+func (c *Client) CreateJob(config api.EvaluationJobConfig) (*api.EvaluationJobResource, error) {
+	body, _, err := c.doRequest(http.MethodPost, apiBasePath+"/jobs", config, nil)
+	if err != nil {
+		return nil, err
+	}
+	return decode[api.EvaluationJobResource](body)
+}
+
+// CancelJob cancels the evaluation job with the given ID.
+func (c *Client) CancelJob(id string) error {
+	_, _, err := c.doRequest(http.MethodDelete, apiBasePath+"/jobs/"+url.PathEscape(id), nil, nil)
+	return err
+}
+
+// ─── List options ─────────────────────────────────────────────────────────────
+
+// ListOption configures query parameters for list endpoints.
+type ListOption func(url.Values)
+
+// WithLimit sets the maximum number of items to return.
+func WithLimit(n int) ListOption {
+	return func(v url.Values) { v.Set("limit", fmt.Sprintf("%d", n)) }
+}
+
+// WithOffset sets the result offset for pagination.
+func WithOffset(n int) ListOption {
+	return func(v url.Values) { v.Set("offset", fmt.Sprintf("%d", n)) }
+}
+
+// withRawParam is an unexported option for setting an arbitrary query parameter.
+func withRawParam(key, value string) ListOption {
+	return func(v url.Values) { v.Set(key, value) }
+}
+
+func applyListOptions(opts []ListOption) url.Values {
+	params := url.Values{}
+	for _, o := range opts {
+		o(params)
+	}
+	return params
+}

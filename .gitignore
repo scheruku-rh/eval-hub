@@ -187,9 +187,9 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file. However, if you prefer,
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
-
-# Ruff stuff:
-.ruff_cache/
+# Keep .vscode/extensions.json
+.vscode/
+!.vscode/extensions.json
 
 # PyPI configuration file
 .pypirc
@@ -205,12 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-.idea/.gitignore
-.idea/eval-hub.iml
-.idea/misc.xml
-.idea/modules.xml
-.idea/vcs.xml
-.idea/inspectionProfiles/profiles_settings.xml
 
 # KFP generated pipeline files
 containers/**/*_pipeline.yaml
@@ -238,3 +232,20 @@ go.work.sum
 
 # sqlite database if you want to create a persisent database in the project root
 /.sqlite
+
+node_modules/
+
+# MLflow
+mlflow.db
+mlruns/
+mlflow.log
+
+.idea/
+.serena/
+
+# Claude - for now everything is ignored
+.claude/
+
+.agentready/
+
+tests/mcp/vscode/test-scripts/reports/

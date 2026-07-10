@@ -17,6 +17,19 @@ type PatchOp string
 
 // The tenant that provides scoping for objects stored in the database but not limited to the database.
 type Tenant string
+type User string
+
+func (t Tenant) String() string {
+	return string(t)
+}
+
+func (t Tenant) IsEmpty() bool {
+	return t == ""
+}
+
+func (u User) String() string {
+	return string(u)
+}
 
 const (
 	PatchOpReplace PatchOp = "replace"
@@ -25,7 +38,7 @@ const (
 )
 
 type Ref struct {
-	ID string `json:"id"`
+	ID string `mapstructure:"id" json:"id" validate:"required"`
 }
 
 type HRef struct {
@@ -34,7 +47,9 @@ type HRef struct {
 
 // Error represents an error response
 type Error struct {
-	Detail string `json:"detail"`
+	MessageCode string `json:"message_code"`
+	Message     string `json:"message"`
+	Trace       string `json:"trace"`
 }
 
 // PatchOperation represents a single patch operation
@@ -49,16 +64,27 @@ type Patch []PatchOperation
 
 // Resource represents base resource fields
 type Resource struct {
-	ID        string    `json:"id"`
-	Tenant    Tenant    `json:"tenant"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string    `json:"id" validate:"resource_id"`
+	Tenant    Tenant    `json:"tenant,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	Owner     User      `json:"owner,omitempty"`
+}
+
+func (r Resource) IsSystemResource() bool {
+	return r.Owner == "system"
 }
 
 // Page represents generic pagination schema
 type Page struct {
-	First      *HRef `json:"first"`
+	First      *HRef `json:"first,omitempty"`
 	Next       *HRef `json:"next,omitempty"`
 	Limit      int   `json:"limit"`
 	TotalCount int   `json:"total_count"`
+}
+
+// EnvVar captures environment variables for the job template.
+type EnvVar struct {
+	Name  string `mapstructure:"name" yaml:"name"`
+	Value string `mapstructure:"value" yaml:"value"`
 }

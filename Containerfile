@@ -1,6 +1,8 @@
 # Multi-stage build for the evaluation hub Go service
 # Build stage
-FROM registry.access.redhat.com/ubi9/go-toolset:1.25 AS builder
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:1.26 AS builder
+
+ARG TARGETARCH
 
 USER 0
 
@@ -14,17 +16,40 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build arguments for versioning
-ARG BUILD_NUMBER=0.0.1
+# Build arguments for versioning, please ensure to modify also in the Runtime stage below
+ARG BUILD_NUMBER=0.4.4
 ARG BUILD_DATE
 ARG BUILD_PACKAGE=main
+ARG GIT_HASH
+ARG LD_FLAGS="-w -s -X '${BUILD_PACKAGE}.Build=${BUILD_NUMBER}' -X '${BUILD_PACKAGE}.BuildDate=${BUILD_DATE}' -X '${BUILD_PACKAGE}.GitHash=${GIT_HASH}'"
 
-# Build the binary with optimizations
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s -X '${BUILD_PACKAGE}.Build=${BUILD_NUMBER}' -X '${BUILD_PACKAGE}.BuildDate=${BUILD_DATE}'" \
+# Build eval-hub binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="${LD_FLAGS}" \
     -a -installsuffix cgo \
     -o eval-hub \
     ./cmd/eval_hub
+
+# Build eval-runtime-sidecar binary (same image can run either via container command override)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="${LD_FLAGS}" \
+    -a -installsuffix cgo \
+    -o eval-runtime-sidecar \
+    ./cmd/eval_runtime_sidecar
+
+# Build the eval runtime init binary (S3 test-data download)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="${LD_FLAGS}" \
+    -a -installsuffix cgo \
+    -o eval-runtime-init \
+    ./cmd/eval_runtime_init
+
+# Build evalhub-mcp binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="${LD_FLAGS}" \
+    -a -installsuffix cgo \
+    -o evalhub-mcp \
+    ./cmd/evalhub_mcp
 
 # Runtime stage
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
@@ -32,29 +57,35 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 # Create user and app directory
 RUN groupadd -g 1000 evalhub && \
     useradd -u 1000 -g evalhub -s /bin/bash -m evalhub && \
-    mkdir -p /app/config && \
+    mkdir -p /app/docs && \
     chown -R evalhub:evalhub /app
 
-# Copy binary from builder
+# Copy both binaries from builder
 COPY --from=builder --chown=evalhub:evalhub /build/eval-hub /app/eval-hub
+COPY --from=builder --chown=evalhub:evalhub /build/eval-runtime-sidecar /app/eval-runtime-sidecar
+COPY --from=builder --chown=evalhub:evalhub /build/eval-runtime-init /app/eval-runtime-init
+COPY --from=builder --chown=evalhub:evalhub /build/evalhub-mcp /app/evalhub-mcp
 
-
-# The config file should not really be part of the image. 
-COPY --chown=evalhub:evalhub config/config.yaml /app/config/config.yaml
-COPY --chown=evalhub:evalhub config/providers /app/config/providers
+# The swagger source files required for the openapi.yaml and docs
+COPY --chown=evalhub:evalhub docs/openapi.* /app/docs/
 
 # Set working directory
 WORKDIR /app
 
-# Switch to non-root user
-USER evalhub
+# Switch to non-root user (numeric UID so Kubernetes runAsNonRoot can verify)
+USER 1000
 
 # Expose service port
 EXPOSE 8080
+EXPOSE 8081
 
 # Environment variables
 ENV PORT=8080 \
     TZ=UTC
+
+# Redeclare build ARGs for labels (ARGs don't cross stage boundaries)
+ARG BUILD_NUMBER=0.4.4
+ARG BUILD_DATE
 
 # Labels for metadata
 LABEL org.opencontainers.image.title="eval-hub" \
@@ -65,6 +96,10 @@ LABEL org.opencontainers.image.title="eval-hub" \
       org.opencontainers.image.vendor="eval-hub"
 
 # Health check removed - wget not available without package installation
+# HEALTHCHECK NONE
 
 # Run the binary
 CMD ["/app/eval-hub"]
+
+# Run MCP server in HTTP mode by default
+# CMD ["/app/evalhub-mcp", "--transport", "http", "--host", "0.0.0.0", "--port", "3001"]

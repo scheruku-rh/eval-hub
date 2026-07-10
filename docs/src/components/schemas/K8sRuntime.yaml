@@ -1,0 +1,48 @@
+type: object
+description: Kubernetes runtime configuration for provider evaluation jobs
+properties:
+  image:
+    type: string
+    description: Container image for the evaluation job (e.g. quay.io/evalhub/adapter:latest)
+  entrypoint:
+    type: array
+    items:
+      type: string
+    description: Container entrypoint command
+  cpu_request:
+    type: string
+    description: CPU request (e.g. 250m)
+  memory_request:
+    type: string
+    description: Memory request (e.g. 512Mi)
+  cpu_limit:
+    type: string
+    description: CPU limit (e.g. 1)
+  memory_limit:
+    type: string
+    description: Memory limit (e.g. 2Gi)
+  gpu:
+    $ref: ./GPUConfig.yaml
+    description: >
+      GPU resource requirement for this adapter. Omit for CPU-only adapters; existing
+      providers without this field are unchanged.
+  env:
+    type: array
+    items:
+      $ref: ./EnvVar.yaml
+    description: Environment variables for the job
+  image_pull_policy:
+    type: string
+    enum:
+      - if_not_present
+      - always
+    description: >
+      When the adapter container image is pulled. API values are if_not_present
+      (default when omitted) or always. EvalHub maps these to the Kubernetes
+      imagePullPolicy values IfNotPresent and Always on the adapter container only.
+      Custom providers may set always during development to pick up fresh image tags.
+      Sidecar and init containers are not configurable and always use the Kubernetes
+      IfNotPresent policy.
+required:
+  - image
+  - entrypoint

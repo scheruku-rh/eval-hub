@@ -1,0 +1,630 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/eval-hub/eval-hub/pkg/evalhubclient"
+)
+
+func TestDefaultConfig(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+
+	if cfg.Transport != "stdio" {
+		t.Errorf("expected default transport \"stdio\", got %q", cfg.Transport)
+	}
+	if cfg.Host != "localhost" {
+		t.Errorf("expected default host \"localhost\", got %q", cfg.Host)
+	}
+	if cfg.Port != 3001 {
+		t.Errorf("expected default port 3001, got %d", cfg.Port)
+	}
+	if cfg.BaseURL != "" {
+		t.Errorf("expected empty default base_url, got %q", cfg.BaseURL)
+	}
+	if cfg.Token != "" {
+		t.Errorf("expected empty default token, got %q", cfg.Token)
+	}
+	if cfg.Tenant != "" {
+		t.Errorf("expected empty default tenant, got %q", cfg.Tenant)
+	}
+	if cfg.Insecure {
+		t.Error("expected default insecure to be false")
+	}
+	if cfg.ListPageLimit != evalhubclient.DefaultListPageLimit {
+		t.Errorf("expected default list_page_limit %d, got %d", evalhubclient.DefaultListPageLimit, cfg.ListPageLimit)
+	}
+}
+
+func TestLoadNoConfig(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Transport != "stdio" {
+		t.Errorf("expected transport \"stdio\", got %q", cfg.Transport)
+	}
+	if cfg.ListPageLimit != evalhubclient.DefaultListPageLimit {
+		t.Errorf("expected list_page_limit %d, got %d", evalhubclient.DefaultListPageLimit, cfg.ListPageLimit)
+	}
+}
+
+func TestLoadEnvVars(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_BASE_URL", "http://env-host:9090")
+	t.Setenv("EVALHUB_TOKEN", "env-token")
+	t.Setenv("EVALHUB_TENANT", "env-tenant")
+	t.Setenv("EVALHUB_INSECURE", "true")
+
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.BaseURL != "http://env-host:9090" {
+
+		t.Errorf("expected base_url from env, got %q", cfg.BaseURL)
+	}
+	if cfg.Token != "env-token" {
+		t.Errorf("expected token from env, got %q", cfg.Token)
+	}
+	if cfg.Tenant != "env-tenant" {
+		t.Errorf("expected tenant from env, got %q", cfg.Tenant)
+	}
+	if !cfg.Insecure {
+		t.Error("expected insecure=true from env")
+	}
+}
+
+func TestLoadEnvListPageLimit(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_LIST_PAGE_LIMIT", "99")
+
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ListPageLimit != 99 {
+		t.Errorf("ListPageLimit = %d, want 99", cfg.ListPageLimit)
+	}
+}
+
+func TestLoadEnvVarsOverridesYAML(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_BASE_URL", "http://env-host:9090")
+	t.Setenv("EVALHUB_TOKEN", "env-token")
+
+	configFile := writeConfig(t, `
+    base_url: http://yaml-host:8080
+    token: yaml-token
+    tenant: yaml-tenant
+`)
+
+	flags := &Flags{ConfigPath: configFile}
+	cfg, err := Load(flags, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.BaseURL != "http://env-host:9090" {
+		t.Errorf("expected env base_url to override YAML, got %q", cfg.BaseURL)
+	}
+	if cfg.Token != "env-token" {
+		t.Errorf("expected env token to override YAML, got %q", cfg.Token)
+	}
+	if cfg.Tenant != "yaml-tenant" {
+		t.Errorf("expected tenant from YAML, got %q", cfg.Tenant)
+	}
+}
+
+func TestLoadCLIFlagsOverrideYAMLAndEnv(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_BASE_URL", "http://env-host:9090")
+
+	configFile := writeConfig(t, `
+    base_url: http://yaml-host:8080
+    insecure: false
+`)
+
+	transport := "http"
+	host := "0.0.0.0"
+	port := 4000
+	insecure := true
+
+	flags := &Flags{
+		ConfigPath: configFile,
+		Transport:  &transport,
+		Host:       &host,
+		Port:       &port,
+		Insecure:   &insecure,
+	}
+	cfg, err := Load(flags, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Transport != "http" {
+		t.Errorf("expected CLI transport, got %q", cfg.Transport)
+	}
+	if cfg.Host != "0.0.0.0" {
+		t.Errorf("expected CLI host, got %q", cfg.Host)
+	}
+	if cfg.Port != 4000 {
+		t.Errorf("expected CLI port 4000, got %d", cfg.Port)
+	}
+	if !cfg.Insecure {
+		t.Error("expected CLI insecure=true to override YAML")
+	}
+	if cfg.BaseURL != "http://env-host:9090" {
+		t.Errorf("expected YAML base_url (not env), got %q", cfg.BaseURL)
+	}
+}
+
+func TestLoadMissingDefaultConfigFile(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	cfg, err := Load(&Flags{}, nil)
+	if err != nil {
+		t.Fatalf("missing default config file should not error, got: %v", err)
+	}
+	if cfg.Transport != "stdio" {
+		t.Errorf("expected default transport, got %q", cfg.Transport)
+	}
+}
+
+func TestLoadMissingExplicitConfigFile(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	_, err := Load(&Flags{ConfigPath: "/nonexistent/config.yaml"}, nil)
+	if err == nil {
+		t.Fatal("expected error for missing explicit config file")
+	}
+}
+
+func TestLoadMalformedYAML(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	configFile := writeConfig(t, `{{{not valid yaml`)
+
+	_, err := Load(&Flags{ConfigPath: configFile}, nil)
+	if err == nil {
+		t.Fatal("expected error for malformed YAML")
+	}
+}
+
+func TestLoadProfileInsecurePointer(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+
+	configFile := writeConfig(t, `
+    base_url: http://localhost:8080
+    insecure: false
+`)
+
+	cfg, err := Load(&Flags{ConfigPath: configFile}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Insecure {
+		t.Error("expected YAML insecure=false to override env insecure=true")
+	}
+}
+
+func TestLoadProfileInsecurePointerWithEnvOverride(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_INSECURE", "true")
+
+	configFile := writeConfig(t, `
+    base_url: http://localhost:8080
+    insecure: false
+`)
+
+	cfg, err := Load(&Flags{ConfigPath: configFile}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Insecure {
+		t.Error("expected YAML insecure=false to override env insecure=true")
+	}
+}
+
+func TestValidateTransport(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		transport string
+		wantErr   bool
+	}{
+		{"stdio", false},
+		{"http", false},
+		{"http-sse", false},
+		{"grpc", true},
+		{"websocket", true},
+		{"", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.transport, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Transport: tt.transport, Host: "localhost", Port: 3001}
+			err := Validate(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate(transport=%q) error = %v, wantErr %v", tt.transport, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidatePort(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		port    int
+		wantErr bool
+	}{
+		{0, false},
+		{1, false},
+		{3001, false},
+		{65535, false},
+		{65536, true},
+		{-1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Transport: "http", Host: "localhost", Port: tt.port}
+			err := Validate(cfg)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate(port=%d) error = %v, wantErr %v", tt.port, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateStdioIgnoresPort(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{Transport: "stdio", Host: "localhost", Port: 0}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("stdio transport should not validate port, got: %v", err)
+	}
+}
+
+func TestValidateListPageLimit(t *testing.T) {
+	t.Parallel()
+	t.Run("too large fails", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "stdio", Host: "localhost", ListPageLimit: 5000}
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected validation error for list_page_limit > 2000")
+		}
+	})
+	t.Run("negative fails", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "stdio", Host: "localhost", ListPageLimit: -1}
+		if err := Validate(cfg); err == nil {
+			t.Fatal("expected validation error for negative list_page_limit")
+		}
+	})
+	t.Run("valid custom passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "stdio", Host: "localhost", ListPageLimit: 400}
+		if err := Validate(cfg); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+}
+
+func TestValidateBaseURL(t *testing.T) {
+	t.Parallel()
+	t.Run("valid URL passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "stdio", Host: "localhost", BaseURL: "http://example.com:8080"}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("expected valid URL to pass, got: %v", err)
+		}
+	})
+
+	t.Run("empty URL passes (omitempty)", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "stdio", Host: "localhost"}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("expected empty URL to pass, got: %v", err)
+		}
+	})
+
+	t.Run("invalid URL fails", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "stdio", Host: "localhost", BaseURL: "not-a-url"}
+		if err := Validate(cfg); err == nil {
+			t.Error("expected invalid URL to fail validation")
+		}
+	})
+}
+
+func TestEnvVarInsecureInvalidValue(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EVALHUB_INSECURE", "not-a-bool")
+
+	_, err := Load(nil, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid EVALHUB_INSECURE value")
+	}
+}
+
+func TestLoadEmptyProfilesSection(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	configFile := writeConfig(t, `
+default_profile: dev
+profiles:
+`)
+
+	cfg, err := Load(&Flags{ConfigPath: configFile}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Transport != "stdio" {
+		t.Errorf("expected default transport, got %q", cfg.Transport)
+	}
+}
+
+func TestLoadDefaultProfileFallback(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	configFile := writeConfig(t, `
+    base_url: http://fallback:8080
+    token: fallback-token
+`)
+
+	cfg, err := Load(&Flags{ConfigPath: configFile}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BaseURL != "http://fallback:8080" {
+		t.Errorf("expected fallback to 'default' profile, got base_url %q", cfg.BaseURL)
+	}
+	if cfg.Token != "fallback-token" {
+		t.Errorf("expected fallback token, got %q", cfg.Token)
+	}
+}
+
+func TestLoadProfilePartialFields(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_TENANT", "env-tenant")
+
+	configFile := writeConfig(t, `
+    tenant: yaml-tenant
+    base_url: http://yaml-host:8080
+    token: yaml-token
+`)
+
+	cfg, err := Load(&Flags{ConfigPath: configFile}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BaseURL != "http://yaml-host:8080" {
+		t.Errorf("expected YAML base_url, got %q", cfg.BaseURL)
+	}
+	if cfg.Token != "yaml-token" {
+		t.Errorf("expected YAML token, got %q", cfg.Token)
+	}
+	if cfg.Tenant != "env-tenant" {
+		t.Errorf("expected env tenant to override YAML, got %q", cfg.Tenant)
+	}
+}
+
+func TestLoadNoConfigHomeMissing(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("HOME", t.TempDir())
+
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Transport != "stdio" {
+		t.Errorf("expected default transport, got %q", cfg.Transport)
+	}
+}
+
+func TestLoadNilFlags(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_TOKEN", "tok")
+
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Token != "tok" {
+		t.Errorf("expected env token, got %q", cfg.Token)
+	}
+}
+
+func TestValidateEmptyHost(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{Transport: "http", Host: "", Port: 3001}
+	if err := Validate(cfg); err == nil {
+		t.Error("expected validation error for empty host")
+	}
+}
+
+func TestLoadConfigFile(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(&Flags{ConfigPath: "../../../config/mcp_local.yaml"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Transport != "http" {
+		t.Errorf("expected transport http, got %q", cfg.Transport)
+	}
+	if cfg.Host != "localhost" {
+		t.Errorf("expected host localhost, got %q", cfg.Host)
+	}
+	if cfg.Port != 3001 {
+		t.Errorf("expected port 3001, got %d", cfg.Port)
+	}
+}
+
+// helpers
+
+func TestValidateTLSPairing(t *testing.T) {
+	t.Parallel()
+	t.Run("both set passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "http", Host: "localhost", Port: 8443, TLSCertFile: "/tls/cert.pem", TLSKeyFile: "/tls/key.pem"}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("expected both TLS fields set to pass, got: %v", err)
+		}
+	})
+	t.Run("neither set passes", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "http", Host: "localhost", Port: 3001}
+		if err := Validate(cfg); err != nil {
+			t.Errorf("expected no TLS fields to pass, got: %v", err)
+		}
+	})
+	t.Run("only cert fails", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "http", Host: "localhost", Port: 8443, TLSCertFile: "/tls/cert.pem"}
+		if err := Validate(cfg); err == nil {
+			t.Error("expected validation error when only tls_cert_file is set")
+		}
+	})
+	t.Run("only key fails", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{Transport: "http", Host: "localhost", Port: 8443, TLSKeyFile: "/tls/key.pem"}
+		if err := Validate(cfg); err == nil {
+			t.Error("expected validation error when only tls_key_file is set")
+		}
+	})
+}
+
+func TestTLSEnabled(t *testing.T) {
+	t.Parallel()
+	t.Run("both set", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{TLSCertFile: "/cert.pem", TLSKeyFile: "/key.pem"}
+		if !cfg.TLSEnabled() {
+			t.Error("expected TLSEnabled() = true")
+		}
+	})
+	t.Run("neither set", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{}
+		if cfg.TLSEnabled() {
+			t.Error("expected TLSEnabled() = false")
+		}
+	})
+}
+
+func TestIsLegacyHTTPTransport(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		transport string
+		want      bool
+	}{
+		{"stdio", false},
+		{"http", false},
+		{"http-sse", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.transport, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Transport: tt.transport}
+			if got := cfg.IsLegacyHTTPTransport(); got != tt.want {
+				t.Errorf("IsLegacyHTTPTransport(%q) = %v, want %v", tt.transport, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsHTTPTransport(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		transport string
+		want      bool
+	}{
+		{"http", true},
+		{"http-sse", true},
+		{"stdio", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.transport, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Transport: tt.transport}
+			if got := cfg.IsHTTPTransport(); got != tt.want {
+				t.Errorf("IsHTTPTransport(%q) = %v, want %v", tt.transport, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadEnvTLS(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+	t.Setenv("EVALHUB_TLS_CERT_FILE", "/tls/cert.pem")
+	t.Setenv("EVALHUB_TLS_KEY_FILE", "/tls/key.pem")
+
+	cfg, err := Load(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TLSCertFile != "/tls/cert.pem" {
+		t.Errorf("expected TLSCertFile from env, got %q", cfg.TLSCertFile)
+	}
+	if cfg.TLSKeyFile != "/tls/key.pem" {
+		t.Errorf("expected TLSKeyFile from env, got %q", cfg.TLSKeyFile)
+	}
+}
+
+func TestLoadFlagsTLS(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+
+	cert := "/flag/cert.pem"
+	key := "/flag/key.pem"
+	flags := &Flags{TLSCertFile: &cert, TLSKeyFile: &key}
+	cfg, err := Load(flags, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TLSCertFile != "/flag/cert.pem" {
+		t.Errorf("expected TLSCertFile from flags, got %q", cfg.TLSCertFile)
+	}
+	if cfg.TLSKeyFile != "/flag/key.pem" {
+		t.Errorf("expected TLSKeyFile from flags, got %q", cfg.TLSKeyFile)
+	}
+}
+
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"EVALHUB_BASE_URL", "EVALHUB_TOKEN", "EVALHUB_TENANT", "EVALHUB_INSECURE",
+		"EVALHUB_TRANSPORT", "EVALHUB_HOST", "EVALHUB_PORT",
+		"EVALHUB_LIST_PAGE_LIMIT", "EVALHUB_TLS_CERT_FILE", "EVALHUB_TLS_KEY_FILE",
+		"EVALHUB_AUTH_TYPE", "EVALHUB_CA_CERT_PATH",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	return path
+}

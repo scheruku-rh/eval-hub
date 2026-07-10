@@ -1,54 +1,61 @@
-provider_id: ragas
-provider_name: RAGAS
-description: Retrieval Augmented Generation Assessment framework
-provider_type: builtin
-base_url: null
+id: ragas
+name: RAGAS
+title: RAGAS
+description: >
+  Retrieval Augmented Generation Assessment — evaluates RAG pipeline quality
+  using metrics like faithfulness, answer relevancy, context precision/recall,
+  and more. Models are accessed via OpenAI-compatible endpoints.
+runtime:
+  k8s:
+    image: quay.io/evalhub/community-ragas:latest
+    entrypoint:
+      - python
+      - main.py
+    cpu_request: 100m
+    memory_request: 128Mi
+    cpu_limit: 1000m
+    memory_limit: 2Gi
+  local:
+    command: python tests/features/test_data/runtime/main.py
 benchmarks:
-  - benchmark_id: faithfulness
-    name: Faithfulness
-    description: Measures factual consistency of generated answer against given context
-    category: rag_quality
+  - id: ragas_rag_default
+    name: RAG Default Suite
+    description: Default RAG evaluation with answer relevancy, context precision, faithfulness, and context recall
+    category: rag_evaluation
     metrics:
-      - faithfulness_score
-    num_few_shot: 0
-    dataset_size: null
-    tags:
-      - rag
+      - answer_relevancy
+      - context_precision
       - faithfulness
-      - factuality
-  - benchmark_id: answer_relevancy
-    name: Answer Relevancy
-    description: Measures how relevant generated answer is to the question
-    category: rag_quality
-    metrics:
-      - answer_relevancy_score
-    num_few_shot: 0
-    dataset_size: null
+      - context_recall
     tags:
+      - ragas
       - rag
-      - relevancy
-      - quality
-  - benchmark_id: context_precision
-    name: Context Precision
-    description: Measures precision of retrieved context
-    category: rag_retrieval
+      - default
+    primary_score:
+      metric: faithfulness
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5
+
+  - id: ragas_rag_full
+    name: RAG Full Suite
+    description: Comprehensive RAG evaluation with all available RAGAS metrics
+    category: rag_evaluation
     metrics:
-      - context_precision_score
-    num_few_shot: 0
-    dataset_size: null
+      - answer_relevancy
+      - answer_similarity
+      - context_precision
+      - faithfulness
+      - context_recall
+      - context_entity_recall
+      - factual_correctness
+      - noise_sensitivity
     tags:
+      - ragas
       - rag
-      - retrieval
-      - precision
-  - benchmark_id: context_recall
-    name: Context Recall
-    description: Measures recall of retrieved context
-    category: rag_retrieval
-    metrics:
-      - context_recall_score
-    num_few_shot: 0
-    dataset_size: null
-    tags:
-      - rag
-      - retrieval
-      - recall
+      - comprehensive
+    primary_score:
+      metric: faithfulness
+      lower_is_better: false
+    pass_criteria:
+      threshold: 0.5

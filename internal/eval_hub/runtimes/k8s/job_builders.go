@@ -1,0 +1,925 @@
+package k8s
+
+// Contains the builder functions that construct Kubernetes objects
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/eval-hub/eval-hub/internal/eval_hub/config"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+)
+
+const (
+	maxK8sNameLength       = 63
+	maxK8sLabelValueLength = 63
+	defaultJobTTLSeconds   = int32(3600)
+	defaultJobBackoffLimit = int32(0)
+	adapterContainerName   = "adapter"
+	sidecarContainerName   = "sidecar"
+	defaultSidecarPort     = int32(8080)
+	initContainerName      = "init"
+	jobSpecVolumeName      = "job-spec"
+	dataVolumeName         = "data"
+	// RFC 1123: volume names must be lowercase DNS labels (no camelCase).
+	terminationFileVolumeName         = "termination-file-volume"
+	adapterTerminationSharedMountPath = "/shared"
+	testDataVolumeName                = "test-data"
+	serviceCAVolumeName               = "evalhub-service-ca"
+	jobSpecFileName                   = "job.json"
+	jobSpecMountPath                  = "/meta/job.json"
+	sidecarConfigFileName             = "sidecar_config.json"
+	sidecarConfigMountPath            = "/meta/sidecar_config.json"
+	dataMountPath                     = "/data"
+	testDataMountPath                 = "/test_data"
+	serviceCAMountPath                = "/etc/pki/ca-trust/source/anchors"
+	specSuffix                        = "-spec"
+	envMLFlowTrackingURIName          = "MLFLOW_TRACKING_URI"
+	envMLFlowWorkspaceName            = "MLFLOW_WORKSPACE"
+	mlflowTokenVolumeName             = "mlflow-token"
+	mlflowTokenMountPath              = "/var/run/secrets/mlflow" // #nosec G101 -- K8s secret mount path
+	mlflowTokenFile                   = "token"
+	ociCredentialsVolumeName          = "oci-credentials"
+	ociCredentialsMountPath           = "/etc/evalhub/.docker/config.json" // #nosec G101 -- K8s secret mount path
+	ociCredentialsSubPath             = ".dockerconfigjson"                // #nosec G101 -- K8s secret subpath name
+	envOCIAuthConfigPathName          = "OCI_AUTH_CONFIG_PATH"
+	modelAuthVolumeName               = "model-auth" // credentials secret; mounted in sidecar only
+	modelAuthMountPath                = "/var/run/secrets/model"
+	// Standard Kubernetes SA mount path; used by both the sidecar SA token volume and the
+	// adapter DownwardAPI namespace volume so the SDK finds files at the expected locations.
+	k8sSAMountPath = "/var/run/secrets/kubernetes.io/serviceaccount"
+	// evalhub SA token — projected into sidecar only; pod-level auto-mount is disabled so adapter cannot see it.
+	evalhubSATokenVolumeName = "evalhub-sa-token" // #nosec G101 -- K8s projected volume name
+	evalhubSATokenFile       = "token"
+	// pod namespace projected into adapter via DownwardAPI so the SDK can set X-Tenant on sidecar requests.
+	// The SA token auto-mount is disabled so the standard namespace file is absent; we expose it explicitly.
+	adapterNamespaceVolumeName      = "pod-namespace"
+	adapterNamespaceFile            = "namespace"
+	modelInternalAuthVolumeName     = "model-auth-internal" // internalModelRef projected volume; mounted in adapter during credential injection
+	testDataSecretVolumeName        = "test-data-secret"
+	testDataSecretMountPath         = "/var/run/secrets/test-data" // #nosec G101 -- K8s secret mount path
+	serviceCABundleFile             = "service-ca.crt"
+	envMLFlowCertPathName           = "MLFLOW_TRACKING_SERVER_CERT_PATH"
+	envEvalHubModeName              = "EVALHUB_MODE"
+	envTestDataS3BucketName         = "TEST_DATA_S3_BUCKET"
+	envTestDataS3KeyName            = "TEST_DATA_S3_KEY"
+	defaultInitCPURequest           = "100m"
+	defaultInitCPULimit             = "500m"
+	defaultInitMemoryRequest        = "128Mi"
+	defaultInitMemoryLimit          = "512Mi"
+	defaultAllowPrivilegeEscalation = false
+	//defaultRunAsUser                = int64(1000)
+	//defaultRunAsGroup               = int64(1000)
+	labelAppKey       = "app"
+	labelComponentKey = "component"
+	// EvalHub CR identity for operator consumers (e.g. failure watcher); values are DNS-label sanitized.
+	labelEvalHubInstanceNameKey      = "evalhub_instance_name"
+	labelEvalHubInstanceNamespaceKey = "evalhub_instance_namespace"
+	labelJobIDKey                    = "job_id"
+	labelProviderIDKey               = "provider_id"
+	labelBenchmarkIDKey              = "benchmark_id"
+	labelBenchmarkIndexKey           = "benchmark_index"
+	labelAppValue                    = "evalhub"
+	labelComponentValue              = "evaluation-job"
+	capabilityDropAll                = "ALL"
+	annotationJobIDKey               = "eval-hub.github.io/job_id"
+	annotationProviderIDKey          = "eval-hub.github.io/provider_id"
+	annotationBenchmarkIDKey         = "eval-hub.github.io/benchmark_id"
+	labelKueueQueueNameKey           = "kueue.x-k8s.io/queue-name"
+)
+
+var (
+	k8sResourceNameSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
+	k8sLabelValueSanitizer   = regexp.MustCompile(`[^a-z0-9-_.]+`)
+)
+
+func sanitizeDNS1123Label(value string) string {
+	safe := strings.ToLower(value)
+	safe = k8sResourceNameSanitizer.ReplaceAllString(safe, "-")
+	safe = strings.Trim(safe, "-")
+	if safe == "" {
+		return "x"
+	}
+	return safe
+}
+
+func sanitizeLabelValue(value string) string {
+	safe := strings.ToLower(value)
+	safe = k8sLabelValueSanitizer.ReplaceAllString(safe, "-")
+	if len(safe) > maxK8sLabelValueLength {
+		safe = safe[:maxK8sLabelValueLength]
+	}
+	safe = strings.Trim(safe, "-_.")
+	if safe == "" {
+		return "x"
+	}
+	return safe
+}
+
+// buildK8sName returns a DNS-1123-safe name for Jobs and ConfigMaps:
+// base = "<jobID>-<guid>", plus optional suffix (e.g. "-spec" for ConfigMaps),
+// all kept within 63 chars.
+func buildK8sName(jobID, resourceGUID, suffix string) string {
+	safeJobID := sanitizeDNS1123Label(jobID)
+	safeGUID := sanitizeDNS1123Label(resourceGUID)
+	maxJobID := maxK8sNameLength - len(suffix) - len(safeGUID) - 1
+	if maxJobID < 1 {
+		maxJobID = 1
+	}
+	if len(safeJobID) > maxJobID {
+		safeJobID = strings.Trim(safeJobID[:maxJobID], "-")
+	}
+	name := safeJobID + "-" + safeGUID + suffix
+	if len(name) > maxK8sNameLength {
+		name = strings.Trim(name[:maxK8sNameLength], "-")
+	}
+	return name
+}
+
+func buildConfigMap(cfg *jobConfig) (*corev1.ConfigMap, error) {
+	labels := jobLabels(cfg)
+	annotations := jobAnnotations(cfg.jobID, cfg.providerID, cfg.benchmarkID)
+	name := configMapName(cfg.jobID, cfg.resourceGUID)
+
+	specJSON, err := json.MarshalIndent(cfg.jobSpec, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal job spec: %w", err)
+	}
+	sidecarJSON := "{}"
+	if cfg.sidecarConfig != nil {
+		bytes, err := json.MarshalIndent(cfg.sidecarConfig, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshal sidecar config: %w", err)
+		}
+		sidecarJSON = string(bytes)
+	}
+
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   cfg.namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Data: map[string]string{
+			jobSpecFileName:       string(specJSON),
+			sidecarConfigFileName: sidecarJSON,
+		},
+	}, nil
+}
+
+// mergeVolumesByName merges volume slices by name; first occurrence of each name is kept, later duplicates are skipped.
+func mergeVolumesByName(slices ...[]corev1.Volume) []corev1.Volume {
+	seen := make(map[string]bool)
+	var out []corev1.Volume
+	for _, sl := range slices {
+		for _, v := range sl {
+			if seen[v.Name] {
+				continue
+			}
+			seen[v.Name] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func sidecarPortFromInt(port int) (int32, error) {
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("port %d out of range (1-65535)", port)
+	}
+	return int32(port), nil
+}
+
+func buildJob(cfg *jobConfig) (*batchv1.Job, error) {
+	if cfg.adapterImage == "" {
+		return nil, fmt.Errorf("adapter image is required")
+	}
+	labels := jobLabels(cfg)
+	annotations := jobAnnotations(cfg.jobID, cfg.providerID, cfg.benchmarkID)
+	jobName := jobName(cfg.jobID, cfg.resourceGUID)
+	configMap := configMapName(cfg.jobID, cfg.resourceGUID)
+
+	ttl := defaultJobTTLSeconds
+	backoff := defaultJobBackoffLimit
+
+	adapterEnvVars := buildEnvVars(cfg)
+	resources, err := buildResources(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build runtimeContainerVolumes list
+	runtimeContainerVolumes, runtimeContainerVolumeMounts := buildRuntimeContainerVolumesAndMounts(configMap, cfg)
+
+	sidecarContainerVolumes, sidecarContainerVolumeMounts := buildSidecarContainerVolumesAndMounts(configMap, cfg)
+
+	initContainers, InitContainsVolumes, err := initContainerVolumesAndMounts(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	jobVolumes := mergeVolumesByName(runtimeContainerVolumes, InitContainsVolumes, sidecarContainerVolumes)
+
+	containers := []corev1.Container{
+		{
+			Name:            adapterContainerName,
+			Image:           cfg.adapterImage,
+			ImagePullPolicy: cfg.adapterPullPolicy,
+			Command:         buildContainerCommand(cfg.entrypoint),
+			Env:             adapterEnvVars,
+			Resources:       resources,
+			SecurityContext: defaultSecurityContext(),
+			VolumeMounts:    runtimeContainerVolumeMounts,
+		},
+	}
+	probePort := defaultSidecarPort
+	if cfg.sidecarConfig != nil && cfg.sidecarConfig.Port != 0 {
+		p, err := sidecarPortFromInt(cfg.sidecarConfig.Port)
+		if err != nil {
+			return nil, fmt.Errorf("sidecar port: %w", err)
+		}
+		probePort = p
+	}
+	// Sidecar is added as an init container with restartPolicy=Always to be
+	// promoted as a native sidecar container (KEP-753).
+	sidecarRestartPolicy := corev1.ContainerRestartPolicyAlways
+	initContainers = append(initContainers, corev1.Container{
+		Name:            sidecarContainerName,
+		Image:           cfg.sidecarImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"/app/eval-runtime-sidecar"},
+		Resources:       cfg.sidecarResources,
+		SecurityContext: defaultSecurityContext(),
+		VolumeMounts:    sidecarContainerVolumeMounts,
+		RestartPolicy:   &sidecarRestartPolicy,
+		// Startup probe: max startup time = failureThreshold × periodSeconds = 30 × 2 = 60s
+		StartupProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/health",
+					Port: intstr.FromInt32(probePort),
+				},
+			},
+			FailureThreshold: 30,
+			PeriodSeconds:    2,
+		},
+		TerminationMessagePath: config.SidecarTerminationFilePath,
+	})
+
+	// Set ServiceAccount if configured
+	// applied below in template spec
+
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        jobName,
+			Namespace:   cfg.namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoff,
+			TTLSecondsAfterFinished: &ttl,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: annotations,
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy:                corev1.RestartPolicyNever,
+					NodeSelector:                 cfg.nodeSelector,
+					InitContainers:               initContainers,
+					Containers:                   containers,
+					Volumes:                      jobVolumes,
+					ServiceAccountName:           cfg.serviceAccountName,
+					AutomountServiceAccountToken: boolPtr(false),
+				},
+			},
+		},
+	}, nil
+}
+
+func buildRuntimeContainerVolumesAndMounts(configMap string, cfg *jobConfig) ([]corev1.Volume, []corev1.VolumeMount) {
+	volumes := []corev1.Volume{
+		{
+			Name: jobSpecVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: configMap},
+				},
+			},
+		},
+		{
+			Name: dataVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			Name: terminationFileVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		// Pod namespace exposed via DownwardAPI so the adapter SDK can read it to set the
+		// X-Tenant header on sidecar requests. Pod-level SA auto-mount is disabled, so the
+		// standard /var/run/secrets/kubernetes.io/serviceaccount/namespace file is absent
+		// on the adapter; we project it explicitly via DownwardAPI instead.
+		{
+			Name: adapterNamespaceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{{
+						DownwardAPI: &corev1.DownwardAPIProjection{
+							Items: []corev1.DownwardAPIVolumeFile{{
+								Path: adapterNamespaceFile,
+								FieldRef: &corev1.ObjectFieldSelector{
+									FieldPath: "metadata.namespace",
+								},
+							}},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	// Build volume mounts list
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      jobSpecVolumeName,
+			MountPath: jobSpecMountPath,
+			SubPath:   jobSpecFileName,
+			ReadOnly:  true,
+		},
+		{
+			Name:      dataVolumeName,
+			MountPath: dataMountPath,
+		},
+		{
+			Name:      terminationFileVolumeName,
+			MountPath: adapterTerminationSharedMountPath,
+		},
+		{
+			Name:      adapterNamespaceVolumeName,
+			MountPath: k8sSAMountPath,
+			ReadOnly:  true,
+		},
+	}
+
+	serviceCAConfigMap := cfg.serviceCAConfigMap
+	// Ensure service CA volume/mount when configured.
+	if serviceCAConfigMap != "" {
+		volumes = ensureServiceCAVolume(volumes, serviceCAConfigMap)
+		volumeMounts = ensureServiceCAMount(volumeMounts)
+	}
+
+	// Add OCI credentials volume/mount when a K8s secret connection is configured.
+	if cfg.ociCredentialsSecret != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: ociCredentialsVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: cfg.ociCredentialsSecret,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      ociCredentialsVolumeName,
+			MountPath: ociCredentialsMountPath,
+			SubPath:   ociCredentialsSubPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// Add model auth volume for the adapter. The sidecar is always active when modelAuthSecretRef
+	// is set (k8s_runtime.go unconditionally redirects the adapter URL to the sidecar), so there
+	// is only one adapter path: a projected volume of passthrough keys (hf-token, ca_cert, both
+	// optional) from the real secret. When credential injection is also active
+	// (modelInternalRefSecretName set), the internalRef secret is prepended so the adapter
+	// receives the synthetic ref tokens alongside the passthrough keys.
+	if cfg.modelAuthSecretRef != "" {
+		optionalTrue := true
+		projectedSources := []corev1.VolumeProjection{
+			{
+				Secret: &corev1.SecretProjection{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cfg.modelAuthSecretRef},
+					Items: []corev1.KeyToPath{
+						{Key: modelHFTokenKey, Path: modelHFTokenKey},
+						{Key: modelCACertKey, Path: modelCACertKey},
+					},
+					Optional: &optionalTrue,
+				},
+			},
+		}
+		if cfg.modelInternalRefSecretName != "" {
+			projectedSources = append([]corev1.VolumeProjection{
+				{
+					Secret: &corev1.SecretProjection{
+						LocalObjectReference: corev1.LocalObjectReference{Name: cfg.modelInternalRefSecretName},
+					},
+				},
+			}, projectedSources...)
+		}
+		volumes = append(volumes, corev1.Volume{
+			Name: modelInternalAuthVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{Sources: projectedSources},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      modelInternalAuthVolumeName,
+			MountPath: modelAuthMountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// Adapter must mount test-data volume when S3 test data is used so it can read data downloaded by init container.
+	if hasS3TestData(cfg) {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      testDataVolumeName,
+			MountPath: testDataMountPath,
+		})
+	}
+
+	// PVC test data: mount the PVC directly — no init container required.
+	if hasPVCTestData(cfg) {
+		volumes = append(volumes, corev1.Volume{
+			Name: testDataVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: cfg.testDataPVC.claimName,
+					ReadOnly:  true,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      testDataVolumeName,
+			MountPath: testDataMountPath,
+			SubPath:   cfg.testDataPVC.subPath,
+			ReadOnly:  true,
+		})
+	}
+
+	return volumes, volumeMounts
+}
+
+func buildSidecarContainerVolumesAndMounts(configMap string, cfg *jobConfig) ([]corev1.Volume, []corev1.VolumeMount) {
+	volumes := []corev1.Volume{
+		{
+			Name: jobSpecVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: configMap},
+				},
+			},
+		},
+		{
+			Name: dataVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			Name: terminationFileVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	}
+
+	// Build volume mounts list
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      jobSpecVolumeName,
+			MountPath: jobSpecMountPath,
+			SubPath:   jobSpecFileName,
+			ReadOnly:  true,
+		},
+		{
+			Name:      jobSpecVolumeName,
+			MountPath: sidecarConfigMountPath,
+			SubPath:   sidecarConfigFileName,
+			ReadOnly:  true,
+		},
+		{
+			Name:      dataVolumeName,
+			MountPath: dataMountPath,
+		},
+		{
+			Name:      terminationFileVolumeName,
+			MountPath: adapterTerminationSharedMountPath,
+		},
+	}
+
+	serviceCAConfigMap := cfg.serviceCAConfigMap
+	// Ensure service CA volume/mount when configured.
+	if serviceCAConfigMap != "" {
+		volumes = ensureServiceCAVolume(volumes, serviceCAConfigMap)
+		volumeMounts = ensureServiceCAMount(volumeMounts)
+	}
+
+	// Projected ServiceAccountToken for the sidecar only.
+	// Pod-level auto-mount is disabled (AutomountServiceAccountToken=false on PodSpec) so that
+	// the adapter cannot access the SA token. The sidecar needs it to authenticate callbacks to
+	// the eval-hub API server (X-Tenant header via kube-rbac-proxy). On ROSA/STS clusters the
+	// default auto-mounted token carries the wrong audience (AWS OIDC); projecting explicitly
+	// gives us a token scoped to the Kubernetes API audience.
+	{
+		expSeconds := int64(3600)
+		volumes = append(volumes, corev1.Volume{
+			Name: evalhubSATokenVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{
+						{
+							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+								Path:              evalhubSATokenFile,
+								ExpirationSeconds: &expSeconds,
+							},
+						},
+					},
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      evalhubSATokenVolumeName,
+			MountPath: k8sSAMountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// Add projected ServiceAccountToken volume for MLFlow authentication (sidecar proxies MLflow).
+	// On ROSA/STS clusters, the auto-mounted SA token has the wrong audience
+	// (AWS OIDC instead of Kubernetes API), so we mint a token with the default
+	// audience that MLFlow's kubernetes-auth plugin can use for SelfSubjectAccessReview.
+	if cfg.mlflowTrackingURI != "" {
+		expSeconds := int64(3600)
+		volumes = append(volumes, corev1.Volume{
+			Name: mlflowTokenVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{
+						{
+							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+								Path:              mlflowTokenFile,
+								ExpirationSeconds: &expSeconds,
+							},
+						},
+					},
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      mlflowTokenVolumeName,
+			MountPath: mlflowTokenMountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// Mount the real credentials secret in the sidecar whenever model auth is configured.
+	// The sidecar needs it for ca_cert TLS and (in the credential-injection path) for
+	// resolving ref tokens. The adapter never sees this volume.
+	if cfg.modelAuthSecretRef != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: modelAuthVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: cfg.modelAuthSecretRef,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      modelAuthVolumeName,
+			MountPath: modelAuthMountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// Mount OCI credentials on the sidecar so it can proxy calls to the OCI registry.
+	// The volume is already on the pod from the runtime container; we only add the mount here.
+	if cfg.ociCredentialsSecret != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: ociCredentialsVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: cfg.ociCredentialsSecret,
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      ociCredentialsVolumeName,
+			MountPath: ociCredentialsMountPath,
+			SubPath:   ociCredentialsSubPath,
+			ReadOnly:  true,
+		})
+	}
+
+	return volumes, volumeMounts
+}
+
+func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1.Volume, error) {
+	var initContainers []corev1.Container
+	var volumes []corev1.Volume
+	if hasS3TestData(cfg) {
+		if cfg.testDataInitImage == "" {
+			return nil, nil, fmt.Errorf("init image is required when S3 test data is configured")
+		}
+		initCommand := defaultTestDataInitCmd
+		initImage := cfg.testDataInitImage
+		initResources := corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(defaultInitCPURequest),
+				corev1.ResourceMemory: resource.MustParse(defaultInitMemoryRequest),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(defaultInitCPULimit),
+				corev1.ResourceMemory: resource.MustParse(defaultInitMemoryLimit),
+			},
+		}
+		volumes = append(volumes, corev1.Volume{
+			Name: testDataVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: testDataSecretVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: cfg.testDataS3.secretRef,
+				},
+			},
+		})
+
+		initContainers = append(initContainers, corev1.Container{
+			Name:            initContainerName,
+			Image:           initImage,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Command:         []string{initCommand},
+			Resources:       initResources,
+			Env: []corev1.EnvVar{
+				{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
+				{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
+			},
+			SecurityContext: defaultSecurityContext(),
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      testDataVolumeName,
+					MountPath: testDataMountPath,
+				},
+				{
+					Name:      testDataSecretVolumeName,
+					MountPath: testDataSecretMountPath,
+					ReadOnly:  true,
+				},
+			},
+		})
+	}
+	return initContainers, volumes, nil
+}
+
+func ensureServiceCAVolume(volumes []corev1.Volume, configMapName string) []corev1.Volume {
+	for _, volume := range volumes {
+		if volume.Name == serviceCAVolumeName {
+			return volumes
+		}
+	}
+	return append(volumes, corev1.Volume{
+		Name: serviceCAVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+			},
+		},
+	})
+}
+
+func ensureServiceCAMount(mounts []corev1.VolumeMount) []corev1.VolumeMount {
+	for _, mount := range mounts {
+		if mount.Name == serviceCAVolumeName {
+			return mounts
+		}
+	}
+	return append(mounts, corev1.VolumeMount{
+		Name:      serviceCAVolumeName,
+		MountPath: serviceCAMountPath,
+		ReadOnly:  true,
+	})
+}
+
+func buildContainerCommand(entrypoint []string) []string {
+	if len(entrypoint) == 0 {
+		return nil
+	}
+	var command []string
+	for _, part := range entrypoint {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		command = append(command, item)
+	}
+	if len(command) == 0 {
+		return nil
+	}
+	return command
+}
+
+func hasS3TestData(cfg *jobConfig) bool {
+	if cfg.testDataS3.secretRef == "" || cfg.testDataS3.bucket == "" {
+		return false
+	}
+	return normalizeS3Key(cfg.testDataS3.key) != ""
+}
+
+func hasPVCTestData(cfg *jobConfig) bool {
+	return cfg.testDataPVC.claimName != ""
+}
+
+func normalizeS3Key(key string) string {
+	return strings.TrimPrefix(strings.TrimSpace(key), "/")
+}
+
+func defaultSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: boolPtr(defaultAllowPrivilegeEscalation),
+		RunAsNonRoot:             boolPtr(true),
+		// RunAsUser and RunAsGroup omitted to let OpenShift assign from allowed range
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{
+				capabilityDropAll,
+			},
+		},
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+// buildEnvVars builds environment variables for the adapter container.
+func buildEnvVars(cfg *jobConfig) []corev1.EnvVar {
+	var env []corev1.EnvVar
+	seen := map[string]bool{}
+
+	env = append(env, corev1.EnvVar{
+		Name:  envEvalHubModeName,
+		Value: "k8s",
+	})
+	seen[envEvalHubModeName] = true
+
+	// When sidecar is at play, mlflow calls are proxied through the sidecar.
+	mlflowTrackingURI := cfg.sidecarBaseURL
+	// Add MLFlow environment variables if tracking is configured
+	if cfg.mlflowTrackingURI != "" {
+		env = append(env, corev1.EnvVar{
+			Name:  envMLFlowTrackingURIName,
+			Value: mlflowTrackingURI,
+		})
+		seen[envMLFlowTrackingURIName] = true
+
+	}
+	if cfg.mlflowWorkspace != "" {
+		env = append(env, corev1.EnvVar{
+			Name:  envMLFlowWorkspaceName,
+			Value: cfg.mlflowWorkspace,
+		})
+		seen[envMLFlowWorkspaceName] = true
+	}
+
+	// Add OCI auth config path when credentials secret is configured
+	if cfg.ociCredentialsSecret != "" {
+		env = append(env, corev1.EnvVar{
+			Name:  envOCIAuthConfigPathName,
+			Value: ociCredentialsMountPath,
+		})
+		seen[envOCIAuthConfigPathName] = true
+	}
+
+	// Set MLFLOW_TRACKING_SERVER_CERT_PATH so mlflow's tracking client
+	// trusts the OpenShift service-serving CA certificate for internal calls.
+	// Note: we intentionally do NOT set REQUESTS_CA_BUNDLE, because it
+	// overrides the system CA bundle globally for all Python requests calls,
+	// breaking external HTTPS connections (e.g. HuggingFace tokenizer downloads).
+	// The adapter SDK's httpx client auto-detects the service CA independently.
+	if cfg.serviceCAConfigMap != "" && cfg.mlflowTrackingURI != "" {
+		env = append(env, corev1.EnvVar{
+			Name:  envMLFlowCertPathName,
+			Value: serviceCAMountPath + "/" + serviceCABundleFile,
+		})
+		seen[envMLFlowCertPathName] = true
+	}
+
+	// Add provider-specific environment variables
+	for _, item := range cfg.defaultEnv {
+		if item.Name == "" || seen[item.Name] {
+			continue
+		}
+		seen[item.Name] = true
+		env = append(env, corev1.EnvVar{
+			Name:  item.Name,
+			Value: item.Value,
+		})
+	}
+	return env
+}
+
+func buildResources(cfg *jobConfig) (corev1.ResourceRequirements, error) {
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{},
+		Limits:   corev1.ResourceList{},
+	}
+	if cfg.cpuRequest != "" {
+		quantity, err := resource.ParseQuantity(cfg.cpuRequest)
+		if err != nil {
+			return corev1.ResourceRequirements{}, fmt.Errorf("parse cpu request: %w", err)
+		}
+		resources.Requests[corev1.ResourceCPU] = quantity
+	}
+	if cfg.memoryRequest != "" {
+		quantity, err := resource.ParseQuantity(cfg.memoryRequest)
+		if err != nil {
+			return corev1.ResourceRequirements{}, fmt.Errorf("parse memory request: %w", err)
+		}
+		resources.Requests[corev1.ResourceMemory] = quantity
+	}
+	if cfg.cpuLimit != "" {
+		quantity, err := resource.ParseQuantity(cfg.cpuLimit)
+		if err != nil {
+			return corev1.ResourceRequirements{}, fmt.Errorf("parse cpu limit: %w", err)
+		}
+		resources.Limits[corev1.ResourceCPU] = quantity
+	}
+	if cfg.memoryLimit != "" {
+		quantity, err := resource.ParseQuantity(cfg.memoryLimit)
+		if err != nil {
+			return corev1.ResourceRequirements{}, fmt.Errorf("parse memory limit: %w", err)
+		}
+		resources.Limits[corev1.ResourceMemory] = quantity
+	}
+	if cfg.gpuCount > 0 && cfg.gpuResource != "" {
+		gpuQty, err := resource.ParseQuantity(fmt.Sprintf("%d", cfg.gpuCount))
+		if err != nil {
+			return corev1.ResourceRequirements{}, fmt.Errorf("parse gpu count: %w", err)
+		}
+		// Kubernetes requires requests == limits for GPU extended resources.
+		resources.Requests[corev1.ResourceName(cfg.gpuResource)] = gpuQty
+		resources.Limits[corev1.ResourceName(cfg.gpuResource)] = gpuQty
+	}
+	if len(resources.Requests) == 0 {
+		resources.Requests = nil
+	}
+	if len(resources.Limits) == 0 {
+		resources.Limits = nil
+	}
+	return resources, nil
+}
+
+func jobName(jobID, resourceGUID string) string {
+	return buildK8sName(jobID, resourceGUID, "")
+}
+
+func configMapName(jobID, resourceGUID string) string {
+	return buildK8sName(jobID, resourceGUID, specSuffix)
+}
+
+func jobLabels(cfg *jobConfig) map[string]string {
+	if cfg == nil {
+		return map[string]string{}
+	}
+	m := map[string]string{
+		labelAppKey:            labelAppValue,
+		labelComponentKey:      labelComponentValue,
+		labelJobIDKey:          sanitizeLabelValue(cfg.jobID),
+		labelProviderIDKey:     sanitizeLabelValue(cfg.providerID),
+		labelBenchmarkIDKey:    sanitizeLabelValue(cfg.benchmarkID),
+		labelBenchmarkIndexKey: sanitizeLabelValue(strconv.Itoa(cfg.benchmarkIndex)),
+	}
+	if cfg.evalHubInstanceName != "" && cfg.evalHubCRNamespace != "" {
+		m[labelEvalHubInstanceNameKey] = sanitizeLabelValue(cfg.evalHubInstanceName)
+		m[labelEvalHubInstanceNamespaceKey] = sanitizeLabelValue(cfg.evalHubCRNamespace)
+	}
+	if cfg.queueKind == "kueue" && cfg.queueName != "" {
+		m[labelKueueQueueNameKey] = cfg.queueName
+	}
+	return m
+}
+
+func jobAnnotations(jobID, providerID, benchmarkID string) map[string]string {
+	return map[string]string{
+		annotationJobIDKey:       jobID,
+		annotationProviderIDKey:  providerID,
+		annotationBenchmarkIDKey: benchmarkID,
+	}
+}

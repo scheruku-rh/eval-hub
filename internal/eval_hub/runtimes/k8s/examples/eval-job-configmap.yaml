@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eval-job-lm-evaluation-harness-mmlu-001-405ef22a-spec
+  namespace: evalhub
+  labels:
+    app: "evalhub"
+    component: "evaluation-job"
+    job_id: "001"
+    provider_id: "lm_evaluation_harness"
+    benchmark_id: "mmlu"
+    benchmark_index: "0"
+    evalhub_instance_name: "evalhub"
+    evalhub_instance_namespace: "evalhub"
+  annotations:
+    eval-hub.github.io/job_id: "001"
+    eval-hub.github.io/provider_id: "lm_evaluation_harness"
+    eval-hub.github.io/benchmark_id: "mmlu"
+data:
+  job.json: |
+    {
+      "id": "001",
+      "provider_id": "lm_evaluation_harness",
+      "benchmark_id": "mmlu",
+      "model": {
+        "url": "http://model-server.models.svc.cluster.local:8000/v1",
+        "name": "example-model"
+      },
+      "num_examples": 50,
+      "parameters": {
+        "max_tokens": 128,
+        "temperature": 0.2
+      },
+      "experiment_name": "eval-experiment",
+      "tags": [
+        {
+          "key": "team",
+          "value": "evals"
+        },
+        {
+          "key": "env",
+          "value": "dev"
+        }
+      ],
+      "callback_url": "http://eval-hub"
+    }
+  sidecar_config.json: |
+    {
+      "port": 8081,
+      "base_url": "http://localhost:8081",
+      "eval_hub": {
+        "http_timeout": 30000000000
+      }
+    }

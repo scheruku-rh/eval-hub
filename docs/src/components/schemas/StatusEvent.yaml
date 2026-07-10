@@ -1,0 +1,7 @@
+type: object
+description: Status update event (e.g. for SSE)
+required:
+  - benchmark_status_event
+properties:
+  benchmark_status_event:
+    $ref: ./BenchmarkStatusEvent.yaml

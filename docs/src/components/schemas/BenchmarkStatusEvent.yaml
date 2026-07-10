@@ -1,0 +1,48 @@
+type: object
+description: Event payload to update benchmark status at runtime
+required:
+  - provider_id
+  - id
+  - status
+properties:
+  provider_id:
+    type: string
+    description: Provider ID
+  id:
+    type: string
+    description: Benchmark ID
+  benchmark_index:
+    type: integer
+    description: Benchmark index in the evaluation job request
+  status:
+    $ref: ./State.yaml
+  phase:
+    $ref: ./JobPhase.yaml
+  metrics:
+    type: object
+    additionalProperties: true
+    description: Benchmark metrics
+  additional_info:
+    type: object
+    additionalProperties: true
+    description: Additional benchmark information
+  artifacts:
+    type: object
+    additionalProperties: true
+    description: Artifacts
+  error_message:
+    $ref: ./MessageInfo.yaml
+  warning_message:
+    $ref: ./MessageInfo.yaml
+  started_at:
+    type: string
+    format: date-time
+  completed_at:
+    type: string
+    format: date-time
+  mlflow_run_id:
+    type: string
+    description: MLFlow run ID
+  logs_path:
+    type: string
+    description: Path to logs

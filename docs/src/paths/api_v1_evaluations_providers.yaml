@@ -1,0 +1,289 @@
+get:
+  tags:
+    - Providers
+  summary: List Providers
+  description: List all registered evaluation providers.
+  operationId: list_providers
+  parameters:
+    - name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        maximum: 100
+        minimum: 1
+        description: Maximum number of providers to return
+        default: 50
+        title: Limit
+      description: Maximum number of providers to return
+    - name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        description: Offset for pagination
+        default: 0
+        title: Offset
+      description: Offset for pagination
+    - name: benchmarks
+      in: query
+      required: false
+      schema:
+        type: boolean
+        default: true
+        description: Set to false to not include benchmarks supported by this provider in the response
+        title: Benchmarks
+      description: Include or exclude benchmarks supported by this provider in the response
+    - name: name
+      in: query
+      required: false
+      schema:
+        type: string
+        title: Name
+      description: Name to search for
+    - name: tags
+      in: query
+      required: false
+      schema:
+        type: string
+        title: Tags
+      description: Tags to search for
+    - name: scope
+      in: query
+      required: false
+      schema:
+        type: string
+        enum:
+          - system
+          - tenant
+        title: Scope of providers
+      description: >
+        Set to `system` to get only system defined providers, or `tenant` to get only user defined providers.
+        If `scope` is not provided, both system and user defined providers will be returned.
+  responses:
+    '200':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProviderResourceList.yaml
+          examples:
+            response:
+              summary: Paginated list of evaluation providers
+              value:
+                first:
+                  href: "/api/v1/evaluations/providers?limit=50&offset=0"
+                limit: 50
+                total_count: 3
+                items:
+                  - resource:
+                      id: "b3f1a2c4-1234-5678-abcd-ef0123456789"
+                      tenant: "default"
+                      created_at: "2025-10-01T00:00:00Z"
+                      updated_at: "2025-10-01T00:00:00Z"
+                    name: "lm_evaluation_harness"
+                    title: "LM Evaluation Harness"
+                    description: "Comprehensive evaluation framework for language models with 180 benchmarks"
+                    tags:
+                      - reasoning
+                      - science
+                      - lm_eval
+                    runtime:
+                      k8s:
+                        image: "quay.io/opendatahub/ta-lmes-job:odh-3.4-ea2"
+                        entrypoint:
+                          - "/opt/app-root/bin/python"
+                          - "/opt/app-root/src/main.py"
+                        cpu_request: "100m"
+                        memory_request: "128Mi"
+                        cpu_limit: "500m"
+                        memory_limit: "4Gi"
+                    benchmarks:
+                      - id: "arc_easy"
+                        name: "Basic science Q&A"
+                        description: "Grade-school science questions testing basic reasoning and scientific knowledge (AI2 Reasoning Challenge, easy split)."
+                        category: "reasoning"
+                        metrics:
+                          - acc
+                          - acc_norm
+                        num_few_shot: 0
+                        dataset_size: 2376
+                        tags:
+                          - reasoning
+                          - science
+                          - lm_eval
+                        primary_score:
+                          metric: "acc_norm"
+                          lower_is_better: false
+                        pass_criteria:
+                          threshold: 0.25
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml
+post:
+  tags:
+    - Providers
+  summary: Create a new provider scoped to the current tenant (Bring Your Own Provider)
+  description: Create a new provider scoped to the current tenant (Bring Your Own Provider)
+  operationId: post_providers
+  requestBody:
+    content:
+      application/json:
+        schema:
+          $ref: ../components/schemas/ProviderConfig.yaml
+        examples:
+          request:
+            summary: Register a custom evaluation provider (BYOP)
+            value:
+              name: "my-custom-evaluator"
+              title: "Custom Internal Evaluator"
+              description: "Internal evaluation adapter for domain-specific benchmarks"
+              tags:
+                - custom
+                - internal
+              runtime:
+                k8s:
+                  image: "registry.internal.example.com/eval/custom-adapter:v1.2"
+                  entrypoint:
+                    - "/opt/app-root/bin/python"
+                    - "/opt/app-root/src/main.py"
+                  cpu_request: "250m"
+                  memory_request: "512Mi"
+                  cpu_limit: "1"
+                  memory_limit: "2Gi"
+              benchmarks:
+                - id: "domain-qa"
+                  name: "Domain Q&A Accuracy"
+                  description: "Measures accuracy on domain-specific question answering"
+                  category: "reasoning"
+                  metrics:
+                    - acc
+                    - f1
+                  primary_score:
+                    metric: "acc"
+                    lower_is_better: false
+                  pass_criteria:
+                    threshold: 0.5
+          LocalRuntimeProvider:
+            summary: Register a provider with a local runtime
+            value:
+              name: "local-eval-harness"
+              title: "Local Evaluation Harness"
+              description: "Local-mode provider for development and testing"
+              tags:
+                - local
+                - development
+              runtime:
+                local:
+                  command: "python /opt/eval/run_benchmark.py"
+                  env:
+                    - name: "LOG_LEVEL"
+                      value: "debug"
+              benchmarks:
+                - id: "custom-qa"
+                  name: "Custom Q&A"
+                  description: "Domain-specific question answering benchmark"
+                  category: "reasoning"
+                  metrics:
+                    - acc
+                  primary_score:
+                    metric: "acc"
+                    lower_is_better: false
+          GPUProvider:
+            summary: Register a GPU-enabled provider
+            value:
+              name: "gpu-lm-eval"
+              title: "GPU LM Evaluation Harness"
+              description: "LM Evaluation Harness adapter with GPU support for large models"
+              tags:
+                - gpu
+                - lm_eval
+              runtime:
+                k8s:
+                  image: "quay.io/opendatahub/ta-lmes-job:odh-3.4-ea2"
+                  entrypoint:
+                    - "/opt/app-root/bin/python"
+                    - "/opt/app-root/src/main.py"
+                  cpu_request: "500m"
+                  memory_request: "1Gi"
+                  cpu_limit: "2"
+                  memory_limit: "8Gi"
+                  gpu:
+                    resource: "nvidia.com/gpu"
+                    count: 1
+                    node_selector:
+                      nvidia.com/gpu.product: "A100-SXM4-40GB"
+              benchmarks:
+                - id: "arc_easy"
+                  name: "Basic science Q&A"
+                  description: "Grade-school science questions testing basic reasoning"
+                  category: "reasoning"
+                  metrics:
+                    - acc
+                    - acc_norm
+                  primary_score:
+                    metric: "acc_norm"
+                    lower_is_better: false
+                  pass_criteria:
+                    threshold: 0.25
+    required: true
+  responses:
+    '201':
+      description: Successful Response
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/ProviderResource.yaml
+          examples:
+            response:
+              summary: Newly registered provider
+              value:
+                resource:
+                  id: "c4d5e6f7-8901-2345-bcde-f67890123456"
+                  tenant: "default"
+                  created_at: "2026-01-20T10:00:00Z"
+                  updated_at: "2026-01-20T10:00:00Z"
+                  owner: "user@example.com"
+                name: "my-custom-evaluator"
+                title: "Custom Internal Evaluator"
+                description: "Internal evaluation adapter for domain-specific benchmarks"
+                tags:
+                  - custom
+                  - internal
+                runtime:
+                  k8s:
+                    image: "registry.internal.example.com/eval/custom-adapter:v1.2"
+                    entrypoint:
+                      - "/opt/app-root/bin/python"
+                      - "/opt/app-root/src/main.py"
+                    cpu_request: "250m"
+                    memory_request: "512Mi"
+                    cpu_limit: "1"
+                    memory_limit: "2Gi"
+                benchmarks:
+                  - id: "domain-qa"
+                    name: "Domain Q&A Accuracy"
+                    description: "Measures accuracy on domain-specific question answering"
+                    category: "reasoning"
+                    metrics:
+                      - acc
+                      - f1
+                    primary_score:
+                      metric: "acc"
+                      lower_is_better: false
+                    pass_criteria:
+                      threshold: 0.5
+    '400':
+      $ref: ../components/responses/BadRequest.yaml
+    '401':
+      $ref: ../components/responses/Unauthorized.yaml
+    '403':
+      $ref: ../components/responses/Forbidden.yaml
+    '404':
+      $ref: ../components/responses/NotFound.yaml

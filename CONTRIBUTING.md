@@ -25,59 +25,64 @@ This project and everyone participating in it is governed by our Code of Conduct
 Eval Hub is an API REST server that serves as a routing and orchestration layer for evaluation backends. It supports flexible deployment options from local development to production Kubernetes/OpenShift clusters. Before contributing, familiarize yourself with:
 
 - **Architecture**: Read the [README.md](README.md) for project overview
-- **API Documentation**: Check [API.md](API.md) for endpoint specifications
+- **API Documentation**: See the bundled [OpenAPI spec](./docs/openapi.yaml) (generated from [docs/src/openapi.yaml](./docs/src/openapi.yaml)) or the [live docs](https://eval-hub.github.io/eval-hub/) for endpoint specifications
 - **Deployment Options**: Understand local development, Podman, and Kubernetes/OpenShift deployment models
 
 ### Prerequisites
 
 **Required for All Development:**
-- Python 3.12+
-- [uv](https://github.com/astral-sh/uv) for dependency management
+
+- Go 1.26.0+
+- [Make](https://www.gnu.org/software/make/) for build automation
 - Git
+- [uv](https://docs.astral.sh/uv/) for Python virtual environment management (required by `make test-fvt`, `make start-service`, and pre-commit hooks)
 
 **Optional for Container Testing:**
+
 - Podman (for containerization testing)
 
 **Optional for Cluster Integration Testing:**
+
 - Access to a Kubernetes/OpenShift cluster
 - kubectl or oc CLI tools
 
 ## Development Setup
 
 1. **Fork and Clone**
+
    ```bash
    git clone https://github.com/your-username/eval-hub.git
    cd eval-hub
    ```
 
-2. **Set up Development Environment**
-   ```bash
-   # Create virtual environment
-   uv venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+2. **Install Dependencies**
 
-   # Install development dependencies
-   uv pip install -e ".[dev]"
+   ```bash
+   # Download and tidy Go dependencies
+   make install-deps
    ```
 
 3. **Configure Environment**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your local configuration
-   ```
+
+   Local settings are layered from [config/config.yaml](config/config.yaml): you can set values directly in that file; override them with environment variables listed under the `env_mappings` key (each entry maps an env var name to a config path, for example `PORT` → `service.port`); and load sensitive values from files under `secrets.dir` using `secrets.mappings` (each entry maps a secret file basename in that directory to a config path). The repository does not include a committed `.env` file; use exported environment variables, secret files you place under `secrets.dir`, and/or edits to `config/config.yaml`, depending on what you need for local work or a cluster.
 
 4. **Install Pre-commit Hooks**
+
    ```bash
    pre-commit install
    ```
 
 5. **Verify Setup**
+
    ```bash
    # Run tests to verify everything works
-   pytest
+   make test
 
-   # Start the development server
-   python -m eval_hub.main
+   # Start the development server (default port 8080)
+   make start-service
+
+   # Or use a custom port
+   PORT=3000 make start-service
    ```
 
 ## How to Contribute
@@ -107,6 +112,7 @@ We welcome contributions in various forms:
 ### 1. Create an Issue
 
 Before starting work, create an issue to discuss:
+
 - **Bug Reports**: Describe the problem with reproduction steps
 - **Feature Requests**: Explain the use case and proposed solution
 - **Architectural Changes**: See special requirements below
@@ -115,6 +121,7 @@ Before starting work, create an issue to discuss:
 #### Architectural Changes
 
 **Definition**: Changes that affect system design, component interactions, or technology choices, including:
+
 - New backend executors or evaluation frameworks
 - API endpoint additions or modifications
 - Database schema changes
@@ -123,6 +130,7 @@ Before starting work, create an issue to discuss:
 - Performance or security architectural decisions
 
 **Required Process**:
+
 1. **Create Issue**: Use `kind/architecture` label
 2. **Discussion**: Allow community input and maintainer feedback in the issue
 3. **Approval**: Maintainers add `status/accepted` label after discussion
@@ -153,6 +161,7 @@ git checkout -b fix/issue-description
 ### 4. Commit Guidelines
 
 Use conventional commits:
+
 ```bash
 # Format: type(scope): description
 git commit -m "feat(api): add collection-based evaluation endpoint"
@@ -163,6 +172,14 @@ git commit -m "test(integration): add MLFlow integration tests"
 
 **Types**: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `ci`, `chore`
 
+PRs targeting `main` are checked by [commitlint](.github/workflows/commitlint.yml) (Commitizen). Messages should follow this format; CI also allows subjects prefixed with `EH` (project convention) or `Merge` / `merge:` for merge commits.
+
+If you have [pre-commit](https://pre-commit.com) installed, commit messages are also checked locally:
+
+```bash
+pre-commit install --hook-type commit-msg
+```
+
 ## Code Standards
 
 ### Code Quality Tools
@@ -171,129 +188,230 @@ We use automated tools to maintain code quality:
 
 ```bash
 # Format code
-black src/ tests/
+make fmt
 
 # Lint code
-ruff src/ tests/
+make lint
 
-# Type checking
-mypy src/
+# Vet code
+make vet
 
 # Run all quality checks
 pre-commit run --all-files
 ```
 
-### Python Standards
+### Go Standards
 
-- **Python Version**: Support 3.12+
-- **Code Style**: Follow PEP 8 (enforced by Black)
-- **Type Hints**: Add type annotations to all new code
-- **Docstrings**: Use Google-style docstrings for public APIs
-- **Import Order**: Follow isort conventions (handled by Ruff)
+- **Go Version**: Support 1.26.0+
+- **Code Style**: Follow standard Go conventions (enforced by gofmt)
+- **Error Handling**: Always check and handle errors explicitly
+- **Documentation**: Use godoc-style comments for exported types and functions
+- **Import Grouping**: Standard library, then external packages, then internal packages
 
 ### Code Organization
 
-- **Modules**: Keep modules focused and cohesive
-- **Dependencies**: Add new dependencies judiciously
-- **Error Handling**: Use appropriate exceptions with clear messages
-- **Logging**: Use structured logging with appropriate levels
-- **Configuration**: Use Pydantic models for configuration
+- **Packages**: Keep packages focused and cohesive
+- **Dependencies**: Add new dependencies carefully
+- **Error Handling**: Return errors explicitly; use error wrapping with `fmt.Errorf` and `%w`
+- **Logging**: Use structured logging with zap (wrapped in slog interface)
+- **Configuration**: Use Viper for configuration management
 
 ### Example Code Structure
 
-```python
-"""Module for handling evaluation requests."""
+```go
+// Package handlers provides HTTP request handlers for evaluation operations.
+package handlers
 
-from typing import List, Optional
-from pydantic import BaseModel
-from structlog import get_logger
+import (
+  "github.com/eval-hub/eval-hub/internal/eval_hub/executioncontext"
+  "github.com/eval-hub/eval-hub/internal/eval_hub/http_wrappers"
+)
 
-logger = get_logger(__name__)
-
-class EvaluationRequest(BaseModel):
-    """Evaluation request model."""
-
-    model: str
-    benchmarks: List[str]
-    experiment_name: Optional[str] = None
-
-async def process_evaluation(request: EvaluationRequest) -> dict:
-    """Process evaluation request.
-
-    Args:
-        request: The evaluation request to process
-
-    Returns:
-        Evaluation results dictionary
-
-    Raises:
-        ValidationError: If request is invalid
-        ExecutionError: If evaluation fails
-    """
-    logger.info("Processing evaluation", model=request.model)
-    # Implementation here
+// HandleCreateEvaluation processes a create-evaluation request.
+// Evaluation handlers use ExecutionContext plus request/response wrappers (not raw http.ResponseWriter).
+func (h *Handlers) HandleCreateEvaluation(
+  ctx *executioncontext.ExecutionContext,
+  req http_wrappers.RequestWrapper,
+  w http_wrappers.ResponseWrapper,
+) {
+  ctx.Logger.Info("Processing evaluation")
+  // Parse body via req, call storage/runtime, write JSON via w
+}
 ```
 
 ## Testing
 
 ### Test Categories
 
-- **Unit Tests**: Test individual functions and classes
+- **Unit Tests**: Test individual functions and packages (in `internal/`)
+- **FVT (Functional Verification Tests)**: BDD-style tests using godog (in `tests/features/`). Scenarios are tagged (`@local_runtime`, `@local`, `@cluster`, `@mlflow`, `@negative`, `@gha-wheel-sanity`) to control which run in each context. The `@local_runtime` tag marks scenarios that need a fully functional local evaluation runtime (local mode / job execution, not Kubernetes); those scenarios are **skipped in the default FVT run** (`~@local_runtime` in `FVT_TAGS`). Opt in by overriding `FVT_TAGS` / `GODOG_TAGS` as documented in `tests/features/README.md`. The `@gha-wheel-sanity` tag marks scenarios executed during GHA wheel validation via `scripts/gha_wheel_sanity_test.sh` (that job passes its own `FVT_TAGS`, so it is unaffected by the default `~@local_runtime`). See `tests/features/README.md` for all tags and examples.
 - **Integration Tests**: Test component interactions
-- **API Tests**: Test HTTP endpoints end-to-end
 
 ### Running Tests
 
 ```bash
-# Run all tests
-pytest
+# Run unit tests, FVT (godog), and FVT against a running server
+make test-all
 
-# Run with coverage
-pytest --cov=src/eval_hub
+# Run only unit tests
+make test
 
-# Run specific test categories
-pytest -m unit
-pytest -m integration
+# Run only FVT tests (no server)
+make test-fvt
 
-# Run tests for specific modules
-pytest tests/unit/services/
+# Generate FVT HTML report (requires Node dev deps)
+npm ci
+make fvt-report
+
+# Run tests with coverage
+make test-coverage
+
+# Run specific unit test
+go test -v ./internal/eval_hub/handlers -run TestHandleName
+
+# Run specific FVT test
+go test -v ./tests/features -run TestFeatureName
 ```
 
 ### Test Requirements
 
 1. **New Features**: Must include unit and integration tests
 2. **Bug Fixes**: Must include regression tests
-3. **Coverage**: Maintain >80% test coverage
-4. **Performance**: Include performance tests for critical paths
+3. **Coverage**: Aim for strong coverage; CI uploads reports to Codecov (`codecov.yml`). There is no hard minimum percentage enforced in the workflow today
+4. **Performance**: Include performance tests for critical paths when relevant
 
 ### Test Structure
 
-```python
-import pytest
-from unittest.mock import AsyncMock, patch
-from eval_hub.services.executor import ExecutionService
+Use `httptest`, mocks, and test doubles as in `internal/eval_hub/handlers/*_test.go`. Handlers take `RequestWrapper` / `ResponseWrapper`, so tests typically build a `Handlers` instance and drive the wrapper types rather than calling `http.Handler` directly.
 
-class TestExecutionService:
-    """Test cases for ExecutionService."""
+## OpenShift Deployment Testing
 
-    @pytest.fixture
-    def service(self):
-        return ExecutionService()
+EvalHub can be deployed on OpenShift via the [TrustyAI operator](https://github.com/trustyai-explainability/trustyai-service-operator), which is included in [OpenDataHub](https://opendatahub.io/).
 
-    async def test_execute_evaluation_success(self, service):
-        """Test successful evaluation execution."""
-        # Test implementation
+### Prerequisites for OpenShift
 
-    async def test_execute_evaluation_timeout(self, service):
-        """Test evaluation timeout handling."""
-        # Test implementation
-```
+- Access to an OpenShift cluster
+- Cluster admin permissions or sufficient RBAC permissions
+- A container registry account (e.g., quay.io) for hosting your custom EvalHub image
+
+### Deployment Steps
+
+1. **Install OpenDataHub from OperatorHub**
+
+   Install OpenDataHub 3.3 (recommended) from the OpenShift OperatorHub:
+   - Navigate to Operators → OperatorHub in the OpenShift console
+   - Search for "Open Data Hub"
+   - Install version 3.3 (or latest stable version)
+
+2. **Create a DataScienceCluster**
+
+   Create a DataScienceCluster with the TrustyAI component enabled (enabled by default):
+
+   ```yaml
+   apiVersion: datasciencecluster.opendatahub.io/v1
+   kind: DataScienceCluster
+   metadata:
+     name: default-dsc
+   spec:
+     components:
+       trustyai:
+         managementState: Managed
+   ```
+
+3. **Build and Push Your EvalHub Image**
+
+   Build your custom EvalHub image and push it to a container registry:
+
+   ```bash
+   # Build the image
+   podman build -t quay.io/<your-username>/eval-hub:latest .
+
+   # Push to registry
+   podman push quay.io/<your-username>/eval-hub:latest
+   ```
+
+4. **Update Manifests with Custom Image**
+
+   In your fork of the TrustyAI operator, update the `params.env` file in your manifests to reference your custom EvalHub image:
+
+   ```env
+   evalHubImage=quay.io/<your-username>/eval-hub:latest
+   ```
+
+5. **Configure Custom Image Reference**
+
+   You have two options to use your custom image:
+
+   **Option A: Using devFlags**
+
+   Update your DataScienceCluster to reference your custom manifests:
+
+   ```yaml
+   apiVersion: datasciencecluster.opendatahub.io/v1
+   kind: DataScienceCluster
+   metadata:
+     name: default-dsc
+   spec:
+     components:
+       trustyai:
+         devFlags:
+           manifests:
+             - contextDir: config
+               sourcePath: ""
+               uri: "https://github.com/<your-org>/trustyai-service-operator/tarball/<your-branch>"
+         managementState: Managed
+   ```
+
+   **Option B: Mount manifests directly**
+
+   Update the manifest files with your custom image reference and mount them to the operator. See the [OpenDataHub Component Development Guide](https://github.com/opendatahub-io/opendatahub-operator/blob/main/hack/component-dev/README.md) for details on mounting manifests.
+
+6. **Deploy an EvalHub Custom Resource**
+
+   Create an EvalHub CR to deploy your instance:
+
+   ```yaml
+   apiVersion: trustyai.opendatahub.io/v1
+   kind: EvalHub
+   metadata:
+     name: evalhub-instance
+     namespace: <your-namespace>
+   spec:
+     database:
+       type: postgresql
+       secret: evalhub-db
+     otel:
+       exporterType: otlp-grpc
+       exporterEndpoint: otel-collector.opentelemetry.svc:4317
+       exporterInsecure: false
+       samplingRatio: "1.0"
+       enableTracing: true
+       enableMetrics: true
+       enableLogs: true
+       tracerTimeout: "30s"
+       tracerBatchInterval: "5s"
+       metricExportInterval: "60s"
+       serviceName: eval-hub
+   ```
+
+   When `spec.otel` is set, the [TrustyAI operator](https://github.com/trustyai-explainability/trustyai-service-operator) writes an `otel:` block into the EvalHub ConfigMap `config.yaml`. Field names use camelCase in the CR and map to eval-hub `otel.*` keys (see [OTEL.md](OTEL.md#openshift--trustyai-operator)).
+
+   To export adapter container logs at job completion, `enable_logs` must be true (`enableLogs: true` above). Eval-hub also supports `otel.enable_job_container_logs` (see [`config/config.yaml`](config/config.yaml)); it has no effect unless `enable_logs` is enabled. That flag is not yet exposed on `spec.otel`—set it in the operator-generated `config.yaml` if needed until the CRD adds it.
+
+### Additional Resources
+
+For more detailed information on deployment and development workflows:
+
+- [TrustyAI Service Operator](https://github.com/trustyai-explainability/trustyai-service-operator)
+- [OpenDataHub Component Development Guide](https://github.com/opendatahub-io/opendatahub-operator/blob/main/hack/component-dev/README.md)
+- [OpenDataHub Documentation](https://opendatahub.io/)
 
 ## Pull Request Process
 
 ### Before Submitting
 
 1. **Rebase on Main**: Ensure your branch is up-to-date
+
    ```bash
    git checkout main
    git pull origin main
@@ -302,8 +420,9 @@ class TestExecutionService:
    ```
 
 2. **Run Full Test Suite**
+
    ```bash
-   pytest
+   make clean test-all
    pre-commit run --all-files
    ```
 
@@ -313,38 +432,45 @@ class TestExecutionService:
 
 When creating a pull request, include:
 
-**Description**
+```markdown
+**What and why**
+
 - Brief summary of changes
 - Link to related issue(s)
 
-**Type of Change**
-- [ ] Bug fix (non-breaking change)
-- [ ] New feature (non-breaking change)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
+Closes #
+
+Assisted-by: Cursor, Claude etc
+
+**Type**
+
+- [ ] feat
+- [ ] fix
+- [ ] docs
+- [ ] refactor / chore
+- [ ] test / ci
 
 **Testing**
-- [ ] Unit tests pass
-- [ ] Integration tests pass
-- [ ] New tests added for new functionality
 
-**Checklist**
-- [ ] Code follows project style guidelines
-- [ ] Self-review of code completed
-- [ ] Documentation updated
-- [ ] No new warnings introduced
+- [ ] Tests added or updated
+- [ ] Tested manually
+
+**Breaking changes**
+
+If yes, describe migration path. Otherwise delete this section.
+```
 
 ### Review Process
 
-1. **Automated Checks**: CI must pass (tests, linting, type checking)
-2. **OWNERS Assignment**: Project maintainers automatically assigned as reviewers ([OWNERS Guide](.github/OWNERS.md))
+1. **Automated Checks**: CI must pass (format check, `go vet`, tests with coverage, API doc generation). For `python-server/`, pre-commit may run mypy when Python files change; Go types are checked by the compiler during build and tests
+2. **OWNERS Assignment**: TBD - Project maintainers will be assigned as reviewers
 3. **Code Review**: Component experts and maintainer approval required
 4. **Testing**: Reviewers may test functionality manually
 5. **Documentation**: Ensure documentation is clear and complete
 
 ## Issue Reporting
 
-We use a structured labeling system with `kind/*` prefixes to categorize issues. See our [Label Guide](.github/LABELS.md) for the complete labeling scheme and setup instructions.
+We use a structured labeling system with `kind/*` prefixes to categorize issues.
 
 ### Bug Reports
 
@@ -362,7 +488,7 @@ When reporting bugs, include:
 
 **Environment**:
 - OS: [e.g. Ubuntu 22.04]
-- Python Version: [e.g. 3.12]
+- Go Version: [e.g. 1.26.0]
 - eval-hub Version: [e.g. 0.1.1]
 - Kubernetes Version: [e.g. 1.28]
 
@@ -404,12 +530,18 @@ For feature requests, include:
 ### Building Documentation
 
 ```bash
-# Generate OpenAPI documentation
-python -m eval_hub.main --generate-openapi
+# The OpenAPI spec source of truth is docs/src/openapi.yaml
+# After editing files under docs/src, regenerate public docs (same as CI):
+npm ci
+make documentation
 
-# Build documentation locally (if using docs framework)
-cd docs/
-make html
+# Or only regenerate bundled OpenAPI/HTML without the full documentation target:
+make generate-public-docs
+
+# View the API docs:
+# - Running server: http://localhost:8080/docs
+# - OpenAPI spec: http://localhost:8080/openapi.yaml
+# - Published: https://eval-hub.github.io/eval-hub/
 ```
 
 ## Community
@@ -430,6 +562,7 @@ make html
 ### Recognition
 
 Contributors are recognized in:
+
 - **Release Notes**: Major contributions highlighted
 - **Contributors**: GitHub automatically tracks contributors
 - **Acknowledgments**: Special recognition for significant contributions

@@ -1,9 +1,866 @@
+@evaluations
 Feature: Evaluations Endpoint
   As a data scientist
   I want to create evaluation jobs
   So that I evaluate models
 
-  Scenario: Create an evaluation job
+  Background:
+    Given I set the header "X-Tenant" to "{{env:X_TENANT|test-tenant}}"
+    And I set the header "X-User" to "{{env:X_USER|test-user}}"
+
+  @negative
+  Scenario: Create evaluation job missing name
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_missing_name.json"
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+
+  @negative
+  Scenario: Create evaluation job missing model
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_missing_model.json"
+    Then the response code should be 400
+
+  @negative
+  Scenario: Get evaluation by non-existent id returns 404
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs/00000000-0000-0000-0000-000000000000"
+    Then the response code should be 404
+    And the response should contain the value "resource_not_found" at path "$.message_code"
+
+  @negative
+  Scenario: List evaluation jobs with invalid limit returns 400
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs?limit=-1"
+    Then the response code should be 400
+    And the response should contain the value "query_parameter_invalid" at path "$.message_code"
+
+  @negative
+  Scenario: List evaluation jobs with invalid offset returns 400
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs?offset=not-a-number"
+    Then the response code should be 400
+    And the response should contain the value "query_parameter_invalid" at path "$.message_code"
+
+  @negative
+  Scenario: List evaluation jobs with non-numeric limit returns 400
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs?limit=invalid"
+    Then the response code should be 400
+    And the response should contain the value "query_parameter_invalid" at path "$.message_code"
+
+  @negative
+  Scenario: Delete evaluation job with non-existent id returns 404
+    Given the service is running
+    When I send a DELETE request to "/api/v1/evaluations/jobs/00000000-0000-0000-0000-000000000000?hard_delete=true"
+    Then the response code should be 404
+    And the response should contain the value "resource_not_found" at path "$.message_code"
+
+  @negative
+  Scenario: Create evaluation job with invalid JSON returns 400
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    { not valid json
+    """
+    Then the response code should be 400
+    And the response should contain the value "invalid_json_request" at path "$.message_code"
+
+  @negative
+  Scenario: Create evaluation job missing benchmarks
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    {
+      "name": "test-evaluation-job",
+      "model": {
+        "url": "http://test.com",
+        "name": "test"
+      },
+      "benchmarks": [
+      ]
+    }
+    """
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+    And the response should contain the value "minimum one benchmark" at path "$.message"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    {
+      "name": "test-evaluation-job",
+      "model": {
+        "url": "http://test.com",
+        "name": "test"
+      }
+    }
+    """
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+    And the response should contain the value "minimum one benchmark" at path "$.message"
+
+  @negative
+  Scenario: Create evaluation job with invalid provider
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_invalid_provider.json"
+    Then the response code should be 404
+    And the response should contain the value "resource_not_found" at path "$.message_code"
+
+  @negative
+  Scenario: Create evaluation job with invalid benchmark
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_invalid_benchmark.json"
+    Then the response code should be 400
+    And the response should contain the value "resource_does_not_exist" at path "$.message_code"
+
+  @negative
+  Scenario: Create evaluation job with invalid collection and benchmarks
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    {
+      "name": "test-evaluation-job",
+      "model": {
+        "url": "http://test.com",
+        "name": "test"
+      },
+      "collection": {
+        "id": "id_not_checked"
+      },
+      "benchmarks": [
+        {
+          "id": "arc_easy",
+          "provider_id": "lm_evaluation_harness"
+        }
+      ]
+    }
+    """
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+    And the response should contain the value "benchmarks or collection" at path "$.message"
+
+  @negative
+  Scenario: Create evaluation job missing benchmark id
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_missing_benchmark_id.json"
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+
+  @negative
+  Scenario: Create evaluation job missing benchmark provider_id
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_missing_provider_id.json"
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+
+  Scenario: List evaluation jobs
     Given the service is running
     When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
     Then the response code should be 202
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.resource.tenant"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.resource.tenant"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.resource.tenant"
+    When I send a GET request to "/api/v1/evaluations/jobs?limit=2"
+    Then the response code should be 200
+    And the "next.href" field in the response should be saved as "value:next_url"
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+            "first": {"type": "object"},
+            "next": {
+              "type": "object",
+              "properties": {
+                "href": {"type": "string"}
+              },
+              "required": ["href"]
+            },
+            "limit": {"type": "integer"},
+            "total_count": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            }
+        },
+        "required": ["limit", "first", "next", "total_count", "items"]
+      }
+    """
+    When I send a GET request to "{{value:next_url}}"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+            "first": {"type": "object"},
+            "next": {
+              "type": "object",
+              "properties": {
+                "href": {"type": "string"}
+              },
+              "required": ["href"]
+            },
+            "limit": {"type": "integer"},
+            "total_count": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "items": {
+              "type": "array",
+              "minItems": 1
+            }
+        },
+        "required": ["limit", "first", "total_count", "items"]
+      }
+    """
+    When I send a GET request to "/api/v1/evaluations/jobs?owner=test-user-not-3"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+          "total_count": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "required": ["total_count"]
+      }
+    """
+
+  @local
+  Scenario: List evaluation jobs with multiple users
+    Given the service is running
+    And I set the header "X-User" to "test-user-1"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    And the response should contain the value "test-user-1" at path "$.resource.owner"
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.resource.tenant"
+    And I set the header "X-User" to "test-user-2"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    And the response should contain the value "test-user-2" at path "$.resource.owner"
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.resource.tenant"
+    And I set the header "X-User" to "test-user-3"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    And the response should contain the value "test-user-3" at path "$.resource.owner"
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.resource.tenant"
+    When I send a GET request to "/api/v1/evaluations/jobs?limit=2"
+    Then the response code should be 200
+    And the "next.href" field in the response should be saved as "value:next_url"
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+            "first": {"type": "object"},
+            "next": {
+              "type": "object",
+              "properties": {
+                "href": {"type": "string"}
+              },
+              "required": ["href"]
+            },
+            "limit": {"type": "integer"},
+            "total_count": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            }
+        },
+        "required": ["limit", "first", "next", "total_count", "items"]
+      }
+    """
+    When I send a GET request to "{{value:next_url}}"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+            "first": {"type": "object"},
+            "next": {
+              "type": "object",
+              "properties": {
+                "href": {"type": "string"}
+              },
+              "required": ["href"]
+            },
+            "limit": {"type": "integer"},
+            "total_count": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "items": {
+              "type": "array",
+              "minItems": 1
+            }
+        },
+        "required": ["limit", "first", "total_count", "items"]
+      }
+    """
+    When I send a GET request to "/api/v1/evaluations/jobs?owner=test-user-1"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1
+          }
+        },
+        "required": ["items"]
+      }
+    """
+    And the response should contain the value "test-user-1" at path "$.items[0].resource.owner"
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.items[0].resource.tenant"
+    When I send a GET request to "/api/v1/evaluations/jobs?owner=test-user-2"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1
+          }
+        },
+        "required": ["items"]
+      }
+    """
+    And the response should contain the value "test-user-2" at path "$.items[0].resource.owner"
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.items[0].resource.tenant"
+    When I send a GET request to "/api/v1/evaluations/jobs?owner=test-user-3"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1
+          }
+        },
+        "required": ["items"]
+      }
+    """
+    And the response should contain the value "test-user-3" at path "$.items[0].resource.owner"
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.items[0].resource.tenant"
+    When I send a GET request to "/api/v1/evaluations/jobs?owner=test-user-not-3"
+    Then the response code should be 200
+    And the response should have schema as:
+    """
+      {
+        "properties": {
+          "total_count": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0
+          }
+        },
+        "required": ["total_count"]
+      }
+    """
+
+  @local
+  Scenario: Update evaluation job status with running status
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_running.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "running" at path "$.status.state"
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_completed.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "completed" at path "$.status.state"
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 409
+    And the response should contain the value "can not be cancelled because" at path "$.message"
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "evaluation_job_updated" at path "$.status.message.message_code"
+    And the response should contain the value "completed" at path "$.status.benchmarks[0].status"
+    And the response should contain the value "arc_easy" at path "$.status.benchmarks[0].id"
+    And the response should contain the value "arc_easy" at path "$.results.benchmarks[0].id"
+    And the response should contain the value "lm_evaluation_harness" at path "$.results.benchmarks[0].provider_id"
+    And the response should contain the value "5" at path "$.benchmarks[0].parameters.limit"
+    And the response should contain the value "google/flan-t5-small" at path "$.benchmarks[0].parameters.tokenizer"
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  @local
+  Scenario: Update evaluation job status with phase
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_running_with_phase.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "running" at path "$.status.state"
+    And the response should contain the value "running_evaluation" at path "$.status.benchmarks[0].phase"
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_completed.json"
+    Then the response code should be 204
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  @local
+  Scenario: Update evaluation job status with invalid phase returns 400
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_invalid_phase.json"
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  # This will no longer work with the logic in the events API
+  @ignore
+  @local
+  Scenario: Pass criteria - job and aggregate results after benchmark events
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_for_pass_criteria_test.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_for_pass_criteria_test_b1.json"
+    Then the response code should be 204
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_for_pass_criteria_test_b2.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "arc_easy" at path "$.results.benchmarks[0].id"
+    And the response should contain the value "0.95" at path "$.results.benchmarks[0].test.primary_score"
+    And the response should contain the value "true" at path "$.results.benchmarks[0].test.pass"
+    And the response should contain the value "AraDiCE_boolq_lev" at path "$.results.benchmarks[1].id"
+    And the response should contain the value "0.1" at path "$.results.benchmarks[1].test.primary_score"
+    And the response should contain the value "true" at path "$.results.benchmarks[1].test.pass"
+    And the response should contain the value "0.92|0.93|0.94" at path "$.results.test.score"
+    And the response should contain the value "true" at path "$.results.test.pass"
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  @local
+  Scenario: Pass criteria from provider - test results from provider benchmarks
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/providers" with body "file:/provider_pass_criteria_test.json"
+    Then the response code should be 201
+    And the "resource.id" field in the response should be saved as "value:provider_id"
+    When I send a POST request to "/api/v1/evaluations/collections" with body "file:/collection_pass_criteria_from_provider_test.json"
+    Then the response code should be 201
+    And the "resource.id" field in the response should be saved as "value:collection_id"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_pass_criteria_from_provider_test.json"
+    Then the response code should be 202
+    And the response should contain the value "{{value:collection_id}}" at path "$.collection.id"
+    And the response should contain the value "pending" at path "$.status.state"
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_pass_criteria_provider_b1.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "pc_b1" at path "$.status.benchmarks[?(@.id == &quot;pc_b1&quot;)].id"
+    And the response should contain the value "running" at path "$.status.state"
+    And the response should contain the value "completed" at path "$.status.benchmarks[?(@.id == &quot;pc_b1&quot;)].status"
+    And the response should contain the value "0.9" at path "$.results.benchmarks[?(@.id == &quot;pc_b1&quot;)].metrics.accuracy"
+    And the response should contain the value "2026-01-12T10:45:32Z" at path "$.status.benchmarks[?(@.id == &quot;pc_b1&quot;)].started_at"
+    And the response should contain the value "2026-01-12T10:47:12Z" at path "$.status.benchmarks[?(@.id == &quot;pc_b1&quot;)].completed_at"
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_pass_criteria_provider_b2.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "pc_b1" at path "$.results.benchmarks[?(@.id == &quot;pc_b1&quot;)].id"
+    And the response should contain the value "0.9" at path "$.results.benchmarks[?(@.id == &quot;pc_b1&quot;)].test.primary_score"
+    And the response should contain the value "true" at path "$.results.benchmarks[?(@.id == &quot;pc_b1&quot;)].test.pass"
+    And the response should contain the value "0.5" at path "$.results.benchmarks[?(@.id == &quot;pc_b1&quot;)].test.threshold"
+    And the response should contain the value "pc_b2" at path "$.results.benchmarks[?(@.id == &quot;pc_b2&quot;)].id"
+    And the response should contain the value "0.8" at path "$.results.benchmarks[?(@.id == &quot;pc_b2&quot;)].test.primary_score"
+    And the response should contain the value "true" at path "$.results.benchmarks[?(@.id == &quot;pc_b2&quot;)].test.pass"
+    And the response should contain the value "0.6" at path "$.results.benchmarks[?(@.id == &quot;pc_b2&quot;)].test.threshold"
+    And the response should contain the value "0.84|0.85|0.86" at path "$.results.test.score"
+    And the response should contain the value "true" at path "$.results.test.pass"
+    And the response should contain the value "completed" at path "$.status.state"
+    When I send a DELETE request to "/api/v1/evaluations/collections/{{value:collection_id}}"
+    Then the response code should be 204
+    When I send a DELETE request to "/api/v1/evaluations/providers/{{value:provider_id}}"
+    Then the response code should be 204
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  @local
+  Scenario: Aggregate pass criteria uses collection threshold when job omits pass_criteria
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/providers" with body "file:/provider_pass_criteria_test.json"
+    Then the response code should be 201
+    And the "resource.id" field in the response should be saved as "value:provider_id"
+    When I send a POST request to "/api/v1/evaluations/collections" with body "file:/collection_pass_criteria_aggregate_from_collection_test.json"
+    Then the response code should be 201
+    And the "resource.id" field in the response should be saved as "value:collection_id"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_omit_pass_criteria_uses_collection_test.json"
+    Then the response code should be 202
+    And the response should contain the value "{{value:collection_id}}" at path "$.collection.id"
+    And the response should contain the value "pending" at path "$.status.state"
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_pass_criteria_provider_b1.json"
+    Then the response code should be 204
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_pass_criteria_provider_b2.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "0.9" at path "$.results.test.threshold"
+    And the response should contain the value "false" at path "$.results.test.pass"
+    And the response should contain the value "0.84|0.85|0.86" at path "$.results.test.score"
+
+  @local
+  Scenario: Cancel running evaluation job (soft delete)
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_running.json"
+    Then the response code should be 204
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "cancelled" at path "$.status.state"
+    And the response should contain the value "cancelled" at path "$.status.benchmarks[0].status"
+    And the response should contain the value "Evaluation job cancelled" at path "$.status.benchmarks[0].error_message.message"
+    And the response should contain the value "evaluation_job_cancelled" at path "$.status.benchmarks[0].error_message.message_code"
+
+  @negative
+  Scenario: Cancel evaluation job with invalid hard_delete query
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=foo"
+    Then the response code should be 400
+    And the response should contain the value "query_parameter_invalid" at path "$.message_code"
+
+  @negative
+  Scenario: Update evaluation job status with invalid payload
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_invalid.json"
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+
+  @negative
+  Scenario: Update evaluation job status missing provider_id
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_missing_provider.json"
+    Then the response code should be 400
+    And the response should contain the value "request_validation_failed" at path "$.message_code"
+
+  @negative
+  Scenario: Update evaluation job status for unknown id returns 404
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs/unknown-id/events" with body "file:/evaluation_job_status_event_running.json"
+    Then the response code should be 404
+
+  @local
+  Scenario: List evaluation jobs filtered by status
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_running.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs?status=running&limit=10"
+    Then the response code should be 200
+    # TODO And the response should contain the value "running" at path "$.items[0].status.state"
+    # And the response should have schema as:
+    #"""
+    #  {
+    #    "properties": {
+    #        "first": {"type": "object"},
+    #        "next": {
+    #          "type": "object",
+    #          "properties": {
+    #            "href": {"type": "string"}
+    #          },
+    #          "required": ["href"]
+    #        },
+    #        "limit": {"type": "integer"},
+    #        "total_count": {
+    #          "type": "integer",
+    #          "minimum": 1
+    #        },
+    #        "items": {
+    #          "type": "array",
+    #          "minItems": 1,
+    #          "maxItems": 1
+    #        }
+    #    },
+    #    "required": ["limit", "first", "total_count", "items"]
+    #  }
+    #"""
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  # This will no longer work with the logic in the events API
+  @ignore
+  @local
+  Scenario: Partially failed job - one benchmark completed and one failed
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job_for_pass_criteria_test.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_for_pass_criteria_test_b1.json"
+    Then the response code should be 204
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_for_pass_criteria_test_b2_failed.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs/{id}"
+    Then the response code should be 200
+    And the response should contain the value "partially_failed" at path "$.status.state"
+    And the response should contain the value "arc_easy" at path "$.status.benchmarks[0].id"
+    And the response should contain the value "completed" at path "$.status.benchmarks[0].status"
+    And the response should contain the value "AraDiCE_boolq_lev" at path "$.status.benchmarks[1].id"
+    And the response should contain the value "failed" at path "$.status.benchmarks[1].status"
+    When I send a DELETE request to "/api/v1/evaluations/jobs/{id}?hard_delete=true"
+    Then the response code should be 204
+
+  Scenario: List evaluation jobs returns empty when filter matches no jobs
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs?owner=nonexistent-user-empty-list&limit=10"
+    Then the response code should be 200
+    And the response should contain the value "0" at path "$.total_count"
+
+  @local
+  Scenario: List evaluation jobs with all search filters
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs"
+    Then the response code should be 200
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_running.json"
+    Then the response code should be 204
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_completed.json"
+    Then the response code should be 204
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_completed.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs"
+    Then the response code should be 200
+    And the response should contain at least the value "4" at path "$.total_count"
+    When I send a GET request to "/api/v1/evaluations/jobs?status=running&limit=10"
+    Then the response code should be 200
+    # TODO And the response should contain the value "running" at path "$.items[0].status.state"
+    # TODO And the response should contain at least the value "1" at path "$.total_count"
+    When I send a GET request to "/api/v1/evaluations/jobs?status=completed&limit=10"
+    Then the response code should be 200
+    And the response should contain the value "completed" at path "$.items[0].status.state"
+    And the response should contain at least the value "2" at path "$.total_count"
+    When I send a GET request to "/api/v1/evaluations/jobs?status=pending&limit=10"
+    Then the response code should be 200
+    And the response should contain the value "pending" at path "$.items[0].status.state"
+    And the response should contain at least the value "1" at path "$.total_count"
+    When I send a GET request to "/api/v1/evaluations/jobs?limit=10"
+    Then the response code should be 200
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.items[0].resource.tenant"
+    And the response should contain at least the value "4" at path "$.total_count"
+    When I set transaction-id to "search-user-and-tags"
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=environment&limit=10"
+    Then the response code should be 200
+    And the response should contain at least the value "4" at path "$.total_count"
+    And the response should contain the value "environment" at path "$.items[0].tags[0]"
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=doesnotexist&limit=10"
+    Then the response code should be 200
+    And the response should equal the value "0" at path "$.total_count"
+
+
+  # TODO Check filtering by user and then create some tests
+
+  @local
+  Scenario: List evaluation jobs with all search filters for multiple users
+    Given the service is running
+    When I send a GET request to "/api/v1/evaluations/jobs"
+    Then the response code should be 200
+    And the "total_count" field in the response should be saved as "value:total_count_ej1"
+    And I set the header "X-User" to "search-user-a"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_running.json"
+    Then the response code should be 204
+    And I set the header "X-User" to "search-user-a"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_completed.json"
+    Then the response code should be 204
+    And I set the header "X-User" to "search-user-b"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    And I set the header "X-User" to "search-user-b"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    Then the response code should be 202
+    When I send a POST request to "/api/v1/evaluations/jobs/{id}/events" with body "file:/evaluation_job_status_event_completed.json"
+    Then the response code should be 204
+    When I send a GET request to "/api/v1/evaluations/jobs"
+    Then the response code should be 200
+    When I send a GET request to "/api/v1/evaluations/jobs?limit=10"
+    Then the response code should be 200
+    And the response should contain the value "{{env:X_TENANT|test-tenant}}" at path "$.items[0].resource.tenant"
+    And the response should contain at least the value "4" at path "$.total_count"
+
+  @negative
+  Scenario: Evaluation endpoints reject unsupported methods
+    Given the service is running
+    When I send a PUT request to "/api/v1/evaluations/jobs" with body "file:/evaluation_job.json"
+    # 403 is returned by the kube-rbac-proxy - 405 is standalone
+    Then the response code should be 405 or 403
+    When I send a POST request to "/api/v1/evaluations/jobs/unknown-id" with body "file:/evaluation_job.json"
+    # 403 is returned by the kube-rbac-proxy - 405 is standalone
+    Then the response code should be 405 or 403
+    When I send a GET request to "/api/v1/evaluations/jobs/unknown-id/events"
+    # 403 is returned by the kube-rbac-proxy - 405 is standalone
+    Then the response code should be 405 or 403
+
+  Scenario: List evaluation jobs by tags and name
+    Given the service is running
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    {
+      "model": {
+        "url": "http://test.com",
+        "name": "test"
+      },
+      "benchmarks": [
+        {
+          "id": "arc_easy",
+          "provider_id": "lm_evaluation_harness"
+        }
+      ],
+      "name": "test-evaluation-job-1",
+      "tags": ["test-tag-1", "test-tag-2"]
+    }
+    """
+    Then the response code should be 202
+    And the "resource.id" field in the response should be saved as "value:first_id"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    {
+      "model": {
+        "url": "http://test.com",
+        "name": "test"
+      },
+      "benchmarks": [
+        {
+          "id": "arc_easy",
+          "provider_id": "lm_evaluation_harness"
+        }
+      ],
+      "name": "test-evaluation-job-2",
+      "tags": ["test-tag-1"]
+    }
+    """
+    Then the response code should be 202
+    And the "resource.id" field in the response should be saved as "value:second_id"
+    When I send a POST request to "/api/v1/evaluations/jobs" with body:
+    """
+    {
+      "model": {
+        "url": "http://test.com",
+        "name": "test"
+      },
+      "benchmarks": [
+        {
+          "id": "arc_easy",
+          "provider_id": "lm_evaluation_harness"
+        }
+      ],
+      "name": "test-evaluation-job-3",
+      "tags": ["test-tag-3", "test-tag-2", "test-tag-1"]
+    }
+    """
+    Then the response code should be 202
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-1"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 3
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-2"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 2
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-4"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-2,test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-2&tags=test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-2|test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 2
+    When I send a GET request to "/api/v1/evaluations/jobs?tags=test-tag-2%7Ctest-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 2
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-4"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-1"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-2"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-4"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-1&tags=test-tag-1"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-1&tags=test-tag-2"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-1&tags=test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-1&tags=test-tag-4"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-2&tags=test-tag-1"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-2&tags=test-tag-2"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-2&tags=test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 0
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-3&tags=test-tag-1"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-3&tags=test-tag-2"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1
+    When I send a GET request to "/api/v1/evaluations/jobs?name=test-evaluation-job-3&tags=test-tag-3"
+    Then the response code should be 200
+    And the array at path "items" in the response should have length 1

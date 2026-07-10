@@ -1,0 +1,13 @@
+{
+    "model": {
+        "url": "{{env:MODEL_URL|http://test.com}}",
+        "name": "{{env:MODEL_NAME|test}}"
+    },
+    "collection": {
+        "id": "{{value:collection_id}}"
+    },
+    "pass_criteria": {
+        "threshold": 0.5
+    },
+    "name": "test-evaluation-job"
+}

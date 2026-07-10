@@ -1,0 +1,56 @@
+openapi: 3.1.0
+info:
+  title: Eval Hub
+  description: API REST server for evaluation backend orchestration
+  version: 0.4.4
+  contact:
+    name: API Support
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+security: []
+tags:
+  - name: Evaluations
+    description: Evaluation job management endpoints
+  - name: Collections
+    description: Benchmark collection management endpoints
+  - name: Providers
+    description: Evaluation provider endpoints
+  - name: Health
+    description: Health check endpoints
+  - name: Metrics
+    description: Metrics and monitoring endpoints
+    x-internal: true
+  - name: Documentation
+    description: API documentation endpoints
+    x-internal: true
+paths:
+  /api/v1/health:
+    $ref: paths/api_v1_health.yaml
+  /metrics:
+    $ref: paths/metrics.yaml
+  /openapi.yaml:
+    $ref: paths/openapi.yaml.yaml
+  /docs:
+    $ref: paths/docs.yaml
+  /api/v1/evaluations/jobs:
+    $ref: paths/api_v1_evaluations_jobs.yaml
+  /api/v1/evaluations/jobs/{id}:
+    $ref: paths/api_v1_evaluations_jobs_{id}.yaml
+  /api/v1/evaluations/jobs/{id}/events:
+    $ref: paths/api_v1_evaluations_jobs_{id}_events.yaml
+  /api/v1/evaluations/jobs/{id}/logs:
+    $ref: paths/api_v1_evaluations_jobs_{id}_logs.yaml
+  /api/v1/evaluations/jobs/{id}/benchmarks/{benchmark_index}/logs:
+    $ref: paths/api_v1_evaluations_jobs_{id}_benchmarks_{benchmark_index}_logs.yaml
+  /api/v1/evaluations/providers:
+    $ref: paths/api_v1_evaluations_providers.yaml
+  /api/v1/evaluations/providers/{id}:
+    $ref: paths/api_v1_evaluations_providers_{id}.yaml
+  /api/v1/evaluations/collections:
+    $ref: paths/api_v1_evaluations_collections.yaml
+  /api/v1/evaluations/collections/{id}:
+    $ref: paths/api_v1_evaluations_collections_{id}.yaml

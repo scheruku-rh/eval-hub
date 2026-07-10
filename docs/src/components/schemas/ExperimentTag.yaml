@@ -1,0 +1,14 @@
+type: object
+description: Tag on an experiment (e.g. MLFlow)
+required:
+  - key
+  - value
+properties:
+  key:
+    type: string
+    maxLength: 250
+    description: Tag key
+  value:
+    type: string
+    maxLength: 5000
+    description: Tag value
