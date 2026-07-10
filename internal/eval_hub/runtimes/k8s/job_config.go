@@ -3,6 +3,7 @@ package k8s
 // Contains the configuration logic that prepares the data needed by the builders
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -126,6 +127,17 @@ func buildJobConfig(evaluation *api.EvaluationJobResource, provider *api.Provide
 	spec, err := shared.BuildJobSpec(evaluation, provider.Resource.ID, benchmarkConfig, benchmarkIndex, &sidecarBaseURL)
 	if err != nil {
 		return nil, err
+	}
+
+	// Rewrite model.url in the job spec so the adapter calls the sidecar (localhost) instead
+	// of the real model endpoint. We keep the full path from the user's model URL so the
+	// sidecar can forward it verbatim without dropping any path prefix (e.g. KServe Gateway
+	// API routes like /llm/llama-3-1-8b-instruct/v1). The sidecar's Rewrite function only
+	// copies scheme+host from its configured target, so whatever path the adapter sends is
+	// forwarded unchanged to the upstream model host.
+	spec.Model.URL, err = rewriteModelURLForSidecar(sidecarBaseURL, evaluation.Model.URL)
+	if err != nil {
+		return nil, fmt.Errorf("rewriting model URL for sidecar: %w", err)
 	}
 
 	// Get EvalHub instance name from environment (set by operator in deployment)
@@ -404,6 +416,31 @@ func readInClusterNamespace() string {
 		return ""
 	}
 	return strings.TrimSpace(string(content))
+}
+
+// rewriteModelURLForSidecar returns a URL that has the scheme and host of sidecarBaseURL
+// but the path (and any query/fragment) of modelURL. This lets the adapter call the sidecar
+// at localhost while preserving the full path prefix the user configured on the model URL
+// (e.g. /llm/llama-3-1-8b-instruct/v1 for a KServe Gateway API ingress route).
+// The sidecar's Rewrite function forwards the incoming path verbatim to the real model host,
+// so the path is preserved end-to-end.
+func rewriteModelURLForSidecar(sidecarBaseURL, modelURL string) (string, error) {
+	sidecar, err := url.Parse(strings.TrimSuffix(sidecarBaseURL, "/"))
+	if err != nil || sidecar.Host == "" {
+		return "", fmt.Errorf("invalid sidecar base URL %q: %w", sidecarBaseURL, err)
+	}
+	model, err := url.Parse(strings.TrimSuffix(modelURL, "/"))
+	if err != nil {
+		return "", fmt.Errorf("invalid model URL %q: %w", modelURL, err)
+	}
+	out := &url.URL{
+		Scheme:   sidecar.Scheme,
+		Host:     sidecar.Host,
+		Path:     model.Path,
+		RawQuery: model.RawQuery,
+		Fragment: model.Fragment,
+	}
+	return out.String(), nil
 }
 
 // resolveImagePullPolicy maps the validated provider image_pull_policy to a corev1.PullPolicy.
