@@ -35,6 +35,13 @@ const (
 	defaultTimeout    = 10 * time.Minute
 )
 
+type s3Credentials struct {
+	accessKey string
+	secretKey string
+	region    string
+	endpoint  string
+}
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -59,6 +66,28 @@ func run() error {
 	return runSDK(bucket, keyPrefix)
 }
 
+func readCredentials() (s3Credentials, error) {
+	creds := s3Credentials{
+		accessKey: readSecret(accessKeyIDKey),
+		secretKey: readSecret(secretAccessKey),
+		region:    readSecret(regionOptionalKey),
+		endpoint:  readSecret(endpointKey),
+	}
+	if creds.accessKey == "" {
+		return creds, fmt.Errorf("missing required secret %s", accessKeyIDKey)
+	}
+	if creds.secretKey == "" {
+		return creds, fmt.Errorf("missing required secret %s", secretAccessKey)
+	}
+	if creds.region == "" {
+		return creds, fmt.Errorf("missing required secret %s", regionOptionalKey)
+	}
+	if creds.endpoint == "" {
+		return creds, fmt.Errorf("missing required secret %s", endpointKey)
+	}
+	return creds, nil
+}
+
 // runSDK downloads using the AWS SDK (default path).
 func runSDK(bucket, keyPrefix string) error {
 	timeout := defaultTimeout
@@ -72,39 +101,20 @@ func runSDK(bucket, keyPrefix string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	accessKey := readSecret(accessKeyIDKey)
-	secretKey := readSecret(secretAccessKey)
-	region := readSecret(regionOptionalKey)
-	endpoint := readSecret(endpointKey)
-
-	if accessKey == "" {
-		return fmt.Errorf("missing required secret %s", accessKeyIDKey)
-	}
-	if secretKey == "" {
-		return fmt.Errorf("missing required secret %s", secretAccessKey)
-	}
-	if region == "" {
-		return fmt.Errorf("missing required secret %s", regionOptionalKey)
-	}
-	if endpoint == "" {
-		return fmt.Errorf("missing required secret %s", endpointKey)
+	creds, err := readCredentials()
+	if err != nil {
+		return err
 	}
 
-	cfg, err := loadAWSConfig(ctx, region, accessKey, secretKey)
+	cfg, err := loadAWSConfig(ctx, creds.region, creds.accessKey, creds.secretKey)
 	if err != nil {
 		return err
 	}
 
 	client := s3.NewFromConfig(cfg, func(options *s3.Options) {
-		if endpoint != "" {
-			options.BaseEndpoint = aws.String(endpoint)
-			options.UsePathStyle = true
-		}
+		options.BaseEndpoint = aws.String(creds.endpoint)
+		options.UsePathStyle = true
 	})
-
-	if err := os.MkdirAll(destDir, 0o750); err != nil {
-		return fmt.Errorf("create dest dir: %w", err)
-	}
 
 	destRoot, err := os.OpenRoot(destDir)
 	if err != nil {
@@ -154,22 +164,9 @@ func runSDK(bucket, keyPrefix string) error {
 // runFuse mounts the S3 prefix via s3fs-fuse and copies the data to destDir.
 // This requires /dev/fuse to be accessible in the container.
 func runFuse(bucket, keyPrefix string) error {
-	accessKey := readSecret(accessKeyIDKey)
-	secretKey := readSecret(secretAccessKey)
-	region := readSecret(regionOptionalKey)
-	endpoint := readSecret(endpointKey)
-
-	if accessKey == "" {
-		return fmt.Errorf("missing required secret %s", accessKeyIDKey)
-	}
-	if secretKey == "" {
-		return fmt.Errorf("missing required secret %s", secretAccessKey)
-	}
-	if region == "" {
-		return fmt.Errorf("missing required secret %s", regionOptionalKey)
-	}
-	if endpoint == "" {
-		return fmt.Errorf("missing required secret %s", endpointKey)
+	creds, err := readCredentials()
+	if err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(fuseMount, 0o750); err != nil {
@@ -177,13 +174,13 @@ func runFuse(bucket, keyPrefix string) error {
 	}
 
 	mountTarget := fmt.Sprintf("%s:/%s", bucket, keyPrefix)
-	opts := fmt.Sprintf("use_path_request_style,endpoint=%s,url=%s,mp_umask=022", region, endpoint)
+	opts := fmt.Sprintf("use_path_request_style,endpoint=%s,url=%s,mp_umask=022", creds.region, creds.endpoint)
 
 	slog.Info("mounting s3fs-fuse", "bucket", bucket, "key", keyPrefix)
 	mountCmd := exec.Command("s3fs", mountTarget, fuseMount, "-o", opts) // #nosec G204 -- args are config-controlled
 	mountCmd.Env = append(os.Environ(),
-		"AWS_ACCESS_KEY_ID="+accessKey,
-		"AWS_SECRET_ACCESS_KEY="+secretKey,
+		"AWS_ACCESS_KEY_ID="+creds.accessKey,
+		"AWS_SECRET_ACCESS_KEY="+creds.secretKey,
 	)
 	mountCmd.Stdout = os.Stdout
 	mountCmd.Stderr = os.Stderr
@@ -210,15 +207,11 @@ func runFuse(bucket, keyPrefix string) error {
 }
 
 func loadAWSConfig(ctx context.Context, region, accessKey, secretKey string) (aws.Config, error) {
-	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
-	}
-	if accessKey != "" && secretKey != "" {
-		provider := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
-		opts = append(opts, config.WithCredentialsProvider(provider))
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	provider := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(region),
+		config.WithCredentialsProvider(provider),
+	)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("load aws config: %w", err)
 	}
