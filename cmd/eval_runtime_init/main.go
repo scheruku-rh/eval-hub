@@ -175,9 +175,6 @@ func runFuse(bucket, keyPrefix string) error {
 	if err := os.MkdirAll(fuseMount, 0o750); err != nil {
 		return fmt.Errorf("create fuse mount dir: %w", err)
 	}
-	if err := os.MkdirAll(destDir, 0o750); err != nil {
-		return fmt.Errorf("create dest dir: %w", err)
-	}
 
 	// Write s3fs password file to a temp location inside the secret dir namespace
 	passwdFile, err := os.CreateTemp("", "s3fs-passwd-*")
