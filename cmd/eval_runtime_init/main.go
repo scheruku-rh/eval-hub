@@ -86,6 +86,9 @@ func runSDK(bucket, keyPrefix string) error {
 	if region == "" {
 		return fmt.Errorf("missing required secret %s", regionOptionalKey)
 	}
+	if endpoint == "" {
+		return fmt.Errorf("missing required secret %s", endpointKey)
+	}
 
 	cfg, err := loadAWSConfig(ctx, region, accessKey, secretKey)
 	if err != nil {
