@@ -659,58 +659,26 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 			},
 		})
 
-		if cfg.useS3FSFuse {
-			initContainers = append(initContainers, buildFuseInitContainer(cfg, initResources))
-		} else {
-			initContainers = append(initContainers, buildSDKInitContainer(cfg, initResources))
-		}
+		initContainers = append(initContainers, buildInitContainer(cfg, initResources))
 	}
 	return initContainers, volumes, nil
 }
 
-// buildSDKInitContainer returns the default AWS SDK-based init container.
-func buildSDKInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
-	return corev1.Container{
-		Name:            initContainerName,
-		Image:           cfg.testDataInitImage,
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{defaultTestDataInitCmd},
-		Resources:       resources,
-		Env: []corev1.EnvVar{
-			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
-			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
-		},
-		SecurityContext: defaultSecurityContext(),
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      testDataVolumeName,
-				MountPath: testDataMountPath,
-			},
-			{
-				Name:      testDataSecretVolumeName,
-				MountPath: testDataSecretMountPath,
-				ReadOnly:  true,
-			},
-		},
+func buildInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
+	env := []corev1.EnvVar{
+		{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
+		{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
 	}
-}
-
-// buildFuseInitContainer runs the same binary as the SDK path but passes
-// TEST_DATA_INIT_MODE=fuse so the binary uses s3fs-fuse instead of the AWS SDK.
-// No privilege escalation — if /dev/fuse is not accessible the container will
-// fail with the cluster's SCC error, which is the intended observable outcome.
-func buildFuseInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
+	if cfg.useS3FSFuse {
+		env = append(env, corev1.EnvVar{Name: envTestDataInitModeName, Value: testDataInitModeFuse})
+	}
 	return corev1.Container{
 		Name:            initContainerName,
 		Image:           cfg.testDataInitImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         []string{defaultTestDataInitCmd},
 		Resources:       resources,
-		Env: []corev1.EnvVar{
-			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
-			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
-			{Name: envTestDataInitModeName, Value: testDataInitModeFuse},
-		},
+		Env:             env,
 		SecurityContext: defaultSecurityContext(),
 		VolumeMounts: []corev1.VolumeMount{
 			{
