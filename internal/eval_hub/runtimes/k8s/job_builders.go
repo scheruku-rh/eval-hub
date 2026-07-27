@@ -659,39 +659,35 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 			},
 		})
 
-		initContainers = append(initContainers, buildInitContainer(cfg, initResources))
+		initEnv := []corev1.EnvVar{
+			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
+			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
+		}
+		if cfg.useS3FSFuse {
+			initEnv = append(initEnv, corev1.EnvVar{Name: envTestDataInitModeName, Value: testDataInitModeFuse})
+		}
+		initContainers = append(initContainers, corev1.Container{
+			Name:            initContainerName,
+			Image:           cfg.testDataInitImage,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Command:         []string{defaultTestDataInitCmd},
+			Resources:       initResources,
+			Env:             initEnv,
+			SecurityContext: defaultSecurityContext(),
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      testDataVolumeName,
+					MountPath: testDataMountPath,
+				},
+				{
+					Name:      testDataSecretVolumeName,
+					MountPath: testDataSecretMountPath,
+					ReadOnly:  true,
+				},
+			},
+		})
 	}
 	return initContainers, volumes, nil
-}
-
-func buildInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
-	env := []corev1.EnvVar{
-		{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
-		{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
-	}
-	if cfg.useS3FSFuse {
-		env = append(env, corev1.EnvVar{Name: envTestDataInitModeName, Value: testDataInitModeFuse})
-	}
-	return corev1.Container{
-		Name:            initContainerName,
-		Image:           cfg.testDataInitImage,
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{defaultTestDataInitCmd},
-		Resources:       resources,
-		Env:             env,
-		SecurityContext: defaultSecurityContext(),
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      testDataVolumeName,
-				MountPath: testDataMountPath,
-			},
-			{
-				Name:      testDataSecretVolumeName,
-				MountPath: testDataSecretMountPath,
-				ReadOnly:  true,
-			},
-		},
-	}
 }
 
 func ensureServiceCAVolume(volumes []corev1.Volume, configMapName string) []corev1.Volume {
