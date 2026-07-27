@@ -176,26 +176,15 @@ func runFuse(bucket, keyPrefix string) error {
 		return fmt.Errorf("create fuse mount dir: %w", err)
 	}
 
-	// Write s3fs password file to a temp location inside the secret dir namespace
-	passwdFile, err := os.CreateTemp("", "s3fs-passwd-*")
-	if err != nil {
-		return fmt.Errorf("create passwd file: %w", err)
-	}
-	defer func() { _ = os.Remove(passwdFile.Name()) }()
-	if _, err := fmt.Fprintf(passwdFile, "%s:%s", accessKey, secretKey); err != nil {
-		return fmt.Errorf("write passwd file: %w", err)
-	}
-	_ = passwdFile.Close()
-	if err := os.Chmod(passwdFile.Name(), 0o600); err != nil {
-		return fmt.Errorf("chmod passwd file: %w", err)
-	}
-
 	mountTarget := fmt.Sprintf("%s:/%s", bucket, keyPrefix)
-	opts := fmt.Sprintf("passwd_file=%s,use_path_request_style,endpoint=%s,url=%s,mp_umask=022",
-		passwdFile.Name(), region, endpoint)
+	opts := fmt.Sprintf("use_path_request_style,endpoint=%s,url=%s,mp_umask=022", region, endpoint)
 
 	slog.Info("mounting s3fs-fuse", "bucket", bucket, "key", keyPrefix)
 	mountCmd := exec.Command("s3fs", mountTarget, fuseMount, "-o", opts) // #nosec G204 -- args are config-controlled
+	mountCmd.Env = append(os.Environ(),
+		"AWS_ACCESS_KEY_ID="+accessKey,
+		"AWS_SECRET_ACCESS_KEY="+secretKey,
+	)
 	mountCmd.Stdout = os.Stdout
 	mountCmd.Stderr = os.Stderr
 	if err := mountCmd.Run(); err != nil {
