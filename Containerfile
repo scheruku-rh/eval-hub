@@ -54,7 +54,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 # Runtime stage
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
-RUN microdnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+RUN microdnf install -y curl rpm && \
+    curl -fsSL https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm -o /tmp/epel.rpm && \
+    rpm -i /tmp/epel.rpm && \
+    rm /tmp/epel.rpm && \
     microdnf install -y s3fs-fuse fuse && \
     microdnf clean all
 
