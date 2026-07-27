@@ -1,0 +1,11 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y s3fs-fuse fuse && \
+    microdnf clean all
+
+COPY cmd/eval_runtime_init_fuse/download.sh /app/eval-runtime-init-fuse
+RUN chmod +x /app/eval-runtime-init-fuse
+
+# s3fs needs to run as root to access /dev/fuse — no USER switch here
+WORKDIR /app
+CMD ["/app/eval-runtime-init-fuse"]

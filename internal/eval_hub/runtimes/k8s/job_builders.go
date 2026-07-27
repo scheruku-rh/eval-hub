@@ -74,6 +74,8 @@ const (
 	defaultInitCPULimit             = "500m"
 	defaultInitMemoryRequest        = "128Mi"
 	defaultInitMemoryLimit          = "512Mi"
+	// s3fs-fuse init container uses a separate command path and needs elevated privileges.
+	defaultTestDataFuseInitCmd      = "/app/eval-runtime-init-fuse"
 	defaultAllowPrivilegeEscalation = false
 	//defaultRunAsUser                = int64(1000)
 	//defaultRunAsGroup               = int64(1000)
@@ -632,8 +634,6 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 		if cfg.testDataInitImage == "" {
 			return nil, nil, fmt.Errorf("init image is required when S3 test data is configured")
 		}
-		initCommand := defaultTestDataInitCmd
-		initImage := cfg.testDataInitImage
 		initResources := corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse(defaultInitCPURequest),
@@ -659,31 +659,77 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 			},
 		})
 
-		initContainers = append(initContainers, corev1.Container{
-			Name:            initContainerName,
-			Image:           initImage,
-			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command:         []string{initCommand},
-			Resources:       initResources,
-			Env: []corev1.EnvVar{
-				{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
-				{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
-			},
-			SecurityContext: defaultSecurityContext(),
-			VolumeMounts: []corev1.VolumeMount{
-				{
-					Name:      testDataVolumeName,
-					MountPath: testDataMountPath,
-				},
-				{
-					Name:      testDataSecretVolumeName,
-					MountPath: testDataSecretMountPath,
-					ReadOnly:  true,
-				},
-			},
-		})
+		if cfg.useS3FSFuse {
+			initContainers = append(initContainers, buildFuseInitContainer(cfg, initResources))
+		} else {
+			initContainers = append(initContainers, buildSDKInitContainer(cfg, initResources))
+		}
 	}
 	return initContainers, volumes, nil
+}
+
+// buildSDKInitContainer returns the default AWS SDK-based init container.
+func buildSDKInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
+	return corev1.Container{
+		Name:            initContainerName,
+		Image:           cfg.testDataInitImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{defaultTestDataInitCmd},
+		Resources:       resources,
+		Env: []corev1.EnvVar{
+			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
+			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
+		},
+		SecurityContext: defaultSecurityContext(),
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      testDataVolumeName,
+				MountPath: testDataMountPath,
+			},
+			{
+				Name:      testDataSecretVolumeName,
+				MountPath: testDataSecretMountPath,
+				ReadOnly:  true,
+			},
+		},
+	}
+}
+
+// buildFuseInitContainer returns an s3fs-fuse-based init container.
+// It requires /dev/fuse access — the job SA must be bound to an SCC that allows the fuse device.
+// Used only for performance comparison; not the production default.
+func buildFuseInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
+	privileged := true
+	return corev1.Container{
+		Name:            initContainerName,
+		Image:           cfg.testDataInitImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{defaultTestDataFuseInitCmd},
+		Resources:       resources,
+		Env: []corev1.EnvVar{
+			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
+			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
+		},
+		// s3fs-fuse requires access to /dev/fuse; privileged is the simplest way to get it.
+		// An SCC with allowedUnsafeSysctls and the fuse device would be the production approach.
+		SecurityContext: &corev1.SecurityContext{
+			Privileged: &privileged,
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      testDataVolumeName,
+				MountPath: testDataMountPath,
+			},
+			{
+				Name:      testDataSecretVolumeName,
+				MountPath: testDataSecretMountPath,
+				ReadOnly:  true,
+			},
+		},
+	}
 }
 
 func ensureServiceCAVolume(volumes []corev1.Volume, configMapName string) []corev1.Volume {

@@ -205,6 +205,7 @@ func (r *K8sRuntime) createBenchmarkResources(ctx context.Context,
 		return fmt.Errorf("service config is required")
 	}
 	jobConfig.testDataInitImage = r.serviceConfig.Service.EvalInitImage
+	jobConfig.useS3FSFuse = r.serviceConfig.Service.EvalInitFuse
 	logger.Info(
 		"kubernetes job config",
 		"job_id", evaluation.Resource.ID,
