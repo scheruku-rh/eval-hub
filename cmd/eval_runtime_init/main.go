@@ -168,6 +168,9 @@ func runFuse(bucket, keyPrefix string) error {
 	if region == "" {
 		return fmt.Errorf("missing required secret %s", regionOptionalKey)
 	}
+	if endpoint == "" {
+		return fmt.Errorf("missing required secret %s", endpointKey)
+	}
 
 	if err := os.MkdirAll(fuseMount, 0o750); err != nil {
 		return fmt.Errorf("create fuse mount dir: %w", err)
@@ -191,11 +194,8 @@ func runFuse(bucket, keyPrefix string) error {
 	}
 
 	mountTarget := fmt.Sprintf("%s:/%s", bucket, keyPrefix)
-	opts := fmt.Sprintf("passwd_file=%s,use_path_request_style,endpoint=%s,allow_other,mp_umask=022",
-		passwdFile.Name(), region)
-	if endpoint != "" {
-		opts += fmt.Sprintf(",url=%s", endpoint)
-	}
+	opts := fmt.Sprintf("passwd_file=%s,use_path_request_style,endpoint=%s,url=%s,mp_umask=022",
+		passwdFile.Name(), region, endpoint)
 
 	slog.Info("mounting s3fs-fuse", "bucket", bucket, "key", keyPrefix)
 	mountCmd := exec.Command("s3fs", mountTarget, fuseMount, "-o", opts) // #nosec G204 -- args are config-controlled
