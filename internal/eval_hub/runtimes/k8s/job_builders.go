@@ -70,12 +70,12 @@ const (
 	envEvalHubModeName              = "EVALHUB_MODE"
 	envTestDataS3BucketName         = "TEST_DATA_S3_BUCKET"
 	envTestDataS3KeyName            = "TEST_DATA_S3_KEY"
+	envTestDataInitModeName         = "TEST_DATA_INIT_MODE"
+	testDataInitModeFuse            = "fuse"
 	defaultInitCPURequest           = "100m"
 	defaultInitCPULimit             = "500m"
 	defaultInitMemoryRequest        = "128Mi"
 	defaultInitMemoryLimit          = "512Mi"
-	// s3fs-fuse init container uses a separate command path and needs elevated privileges.
-	defaultTestDataFuseInitCmd      = "/app/eval-runtime-init-fuse"
 	defaultAllowPrivilegeEscalation = false
 	//defaultRunAsUser                = int64(1000)
 	//defaultRunAsGroup               = int64(1000)
@@ -695,29 +695,23 @@ func buildSDKInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements
 	}
 }
 
-// buildFuseInitContainer returns an s3fs-fuse-based init container.
-// It requires /dev/fuse access — the job SA must be bound to an SCC that allows the fuse device.
-// Used only for performance comparison; not the production default.
+// buildFuseInitContainer runs the same binary as the SDK path but passes
+// TEST_DATA_INIT_MODE=fuse so the binary uses s3fs-fuse instead of the AWS SDK.
+// No privilege escalation — if /dev/fuse is not accessible the container will
+// fail with the cluster's SCC error, which is the intended observable outcome.
 func buildFuseInitContainer(cfg *jobConfig, resources corev1.ResourceRequirements) corev1.Container {
-	privileged := true
 	return corev1.Container{
 		Name:            initContainerName,
 		Image:           cfg.testDataInitImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{defaultTestDataFuseInitCmd},
+		Command:         []string{defaultTestDataInitCmd},
 		Resources:       resources,
 		Env: []corev1.EnvVar{
 			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
 			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
+			{Name: envTestDataInitModeName, Value: testDataInitModeFuse},
 		},
-		// s3fs-fuse requires access to /dev/fuse; privileged is the simplest way to get it.
-		// An SCC with allowedUnsafeSysctls and the fuse device would be the production approach.
-		SecurityContext: &corev1.SecurityContext{
-			Privileged: &privileged,
-			SeccompProfile: &corev1.SeccompProfile{
-				Type: corev1.SeccompProfileTypeRuntimeDefault,
-			},
-		},
+		SecurityContext: defaultSecurityContext(),
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      testDataVolumeName,
