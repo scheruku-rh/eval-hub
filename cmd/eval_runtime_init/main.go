@@ -28,7 +28,7 @@ const (
 	secretDir         = "/var/run/secrets/test-data" // #nosec G101 -- K8s secret mount path
 	destDir           = "/test_data"
 	fuseMount         = "/mnt/s3"
-	regionOptionalKey = "AWS_DEFAULT_REGION"
+	regionKey = "AWS_DEFAULT_REGION"
 	endpointKey       = "AWS_S3_ENDPOINT"
 	accessKeyIDKey    = "AWS_ACCESS_KEY_ID"
 	secretAccessKey   = "AWS_SECRET_ACCESS_KEY" // #nosec G101 -- env var name, not a credential value
@@ -70,7 +70,7 @@ func readCredentials() (s3Credentials, error) {
 	creds := s3Credentials{
 		accessKey: readSecret(accessKeyIDKey),
 		secretKey: readSecret(secretAccessKey),
-		region:    readSecret(regionOptionalKey),
+		region:    readSecret(regionKey),
 		endpoint:  readSecret(endpointKey),
 	}
 	if creds.accessKey == "" {
@@ -80,7 +80,7 @@ func readCredentials() (s3Credentials, error) {
 		return creds, fmt.Errorf("missing required secret %s", secretAccessKey)
 	}
 	if creds.region == "" {
-		return creds, fmt.Errorf("missing required secret %s", regionOptionalKey)
+		return creds, fmt.Errorf("missing required secret %s", regionKey)
 	}
 	if creds.endpoint == "" {
 		return creds, fmt.Errorf("missing required secret %s", endpointKey)
