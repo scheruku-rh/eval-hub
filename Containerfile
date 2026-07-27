@@ -63,8 +63,8 @@ RUN curl -fsSL https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarc
 # Create user and app directory
 RUN groupadd -g 1000 evalhub && \
     useradd -u 1000 -g evalhub -s /bin/bash -m evalhub && \
-    mkdir -p /app/docs && \
-    chown -R evalhub:evalhub /app
+    mkdir -p /app/docs /mnt/s3 && \
+    chown -R evalhub:evalhub /app /mnt/s3
 
 # Copy both binaries from builder
 COPY --from=builder --chown=evalhub:evalhub /build/eval-hub /app/eval-hub
