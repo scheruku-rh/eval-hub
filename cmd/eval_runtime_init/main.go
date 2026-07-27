@@ -176,7 +176,7 @@ func runFuse(bucket, keyPrefix string) error {
 	mountTarget := fmt.Sprintf("%s:/%s", bucket, keyPrefix)
 	opts := fmt.Sprintf("use_path_request_style,endpoint=%s,url=%s,mp_umask=022", creds.region, creds.endpoint)
 
-	slog.Info("mounting s3fs-fuse", "bucket", bucket, "key", keyPrefix)
+	slog.Info("mounting s3fs-fuse", "bucket", bucket, "key", keyPrefix, "cmd", "s3fs "+mountTarget+" "+fuseMount+" -o "+opts)
 	mountCmd := exec.Command("s3fs", mountTarget, fuseMount, "-o", opts) // #nosec G204 -- args are config-controlled
 	mountCmd.Env = append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+creds.accessKey,
