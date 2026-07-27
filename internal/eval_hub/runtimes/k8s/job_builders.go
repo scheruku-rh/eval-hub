@@ -665,10 +665,8 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
 			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
 		}
-		initSecCtx := defaultSecurityContext()
 		if cfg.useS3FSFuse {
 			initEnv = append(initEnv, corev1.EnvVar{Name: envTestDataInitModeName, Value: testDataInitModeFuse})
-			initSecCtx = fuseSecurityContext()
 		}
 		initContainers = append(initContainers, corev1.Container{
 			Name:            initContainerName,
@@ -677,7 +675,7 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 			Command:         []string{initCommand},
 			Resources:       initResources,
 			Env:             initEnv,
-			SecurityContext: initSecCtx,
+			SecurityContext: defaultSecurityContext(),
 			VolumeMounts: []corev1.VolumeMount{
 				{
 					Name:      testDataVolumeName,
@@ -765,23 +763,6 @@ func defaultSecurityContext() *corev1.SecurityContext {
 			Drop: []corev1.Capability{
 				capabilityDropAll,
 			},
-		},
-		SeccompProfile: &corev1.SeccompProfile{
-			Type: corev1.SeccompProfileTypeRuntimeDefault,
-		},
-	}
-}
-
-// fuseSecurityContext returns a security context for the s3fs-fuse init container.
-// SYS_ADMIN is required to open /dev/fuse; the pod's service account must be bound
-// to an SCC that permits this capability (e.g. privileged).
-func fuseSecurityContext() *corev1.SecurityContext {
-	return &corev1.SecurityContext{
-		AllowPrivilegeEscalation: boolPtr(true),
-		RunAsNonRoot:             boolPtr(true),
-		Capabilities: &corev1.Capabilities{
-			Add:  []corev1.Capability{"SYS_ADMIN"},
-			Drop: []corev1.Capability{},
 		},
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
