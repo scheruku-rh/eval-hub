@@ -659,6 +659,8 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 			},
 		})
 
+		initCommand := defaultTestDataInitCmd
+		initImage := cfg.testDataInitImage
 		initEnv := []corev1.EnvVar{
 			{Name: envTestDataS3BucketName, Value: cfg.testDataS3.bucket},
 			{Name: envTestDataS3KeyName, Value: normalizeS3Key(cfg.testDataS3.key)},
@@ -668,9 +670,9 @@ func initContainerVolumesAndMounts(cfg *jobConfig) ([]corev1.Container, []corev1
 		}
 		initContainers = append(initContainers, corev1.Container{
 			Name:            initContainerName,
-			Image:           cfg.testDataInitImage,
+			Image:           initImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command:         []string{defaultTestDataInitCmd},
+			Command:         []string{initCommand},
 			Resources:       initResources,
 			Env:             initEnv,
 			SecurityContext: defaultSecurityContext(),
