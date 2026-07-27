@@ -54,7 +54,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 # Runtime stage
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
-RUN microdnf install -y s3fs-fuse fuse && microdnf clean all
+RUN microdnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    microdnf install -y s3fs-fuse fuse && \
+    microdnf clean all
 
 # Create user and app directory
 RUN groupadd -g 1000 evalhub && \
