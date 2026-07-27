@@ -54,6 +54,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 # Runtime stage
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
+RUN microdnf install -y s3fs-fuse fuse && microdnf clean all
+
 # Create user and app directory
 RUN groupadd -g 1000 evalhub && \
     useradd -u 1000 -g evalhub -s /bin/bash -m evalhub && \
@@ -65,6 +67,8 @@ COPY --from=builder --chown=evalhub:evalhub /build/eval-hub /app/eval-hub
 COPY --from=builder --chown=evalhub:evalhub /build/eval-runtime-sidecar /app/eval-runtime-sidecar
 COPY --from=builder --chown=evalhub:evalhub /build/eval-runtime-init /app/eval-runtime-init
 COPY --from=builder --chown=evalhub:evalhub /build/evalhub-mcp /app/evalhub-mcp
+COPY cmd/eval_runtime_init_fuse/download.sh /app/eval-runtime-init-fuse
+RUN chmod +x /app/eval-runtime-init-fuse
 
 # The swagger source files required for the openapi.yaml and docs
 COPY --chown=evalhub:evalhub docs/openapi.* /app/docs/
