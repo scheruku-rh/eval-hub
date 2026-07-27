@@ -21,10 +21,10 @@ type ServiceConfig struct {
 	// EvalInitFuse enables the s3fs-fuse init container instead of the AWS SDK downloader.
 	// Requires /dev/fuse access — the job pod's service account must be bound to an SCC
 	// that allows the fuse device. Use only for performance testing; disabled by default.
-	EvalInitFuse    bool   `mapstructure:"eval_init_fuse,omitempty"`
-	LocalMode       bool   `mapstructure:"local_mode,omitempty"`
-	TLSCertFile     string `mapstructure:"tls_cert_file,omitempty"`
-	TLSKeyFile      string `mapstructure:"tls_key_file,omitempty"`
+	EvalInitFuse bool   `mapstructure:"eval_init_fuse,omitempty"`
+	LocalMode    bool   `mapstructure:"local_mode,omitempty"`
+	TLSCertFile  string `mapstructure:"tls_cert_file,omitempty"`
+	TLSKeyFile   string `mapstructure:"tls_key_file,omitempty"`
 	// ReadTimeout is http.Server ReadTimeout (entire request read). Zero uses default (15s).
 	ReadTimeout time.Duration `mapstructure:"read_timeout,omitempty"`
 	// WriteTimeout is http.Server WriteTimeout. Zero uses default (15s).

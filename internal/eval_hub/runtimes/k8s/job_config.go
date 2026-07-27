@@ -73,8 +73,8 @@ type jobConfig struct {
 	testDataInitImage          string
 	// useS3FSFuse switches the S3 init container from the AWS SDK downloader to s3fs-fuse.
 	// Requires an SCC that grants /dev/fuse access to the job pod. For performance comparison only.
-	useS3FSFuse                bool
-	sidecarConfig              *config.SidecarConfig
+	useS3FSFuse   bool
+	sidecarConfig *config.SidecarConfig
 	// queueKind and queueName come from evaluation.Queue when set (API layer normalizes empty kind to kueue).
 	queueKind string
 	queueName string
