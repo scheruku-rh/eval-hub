@@ -35,11 +35,24 @@ const (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	tmStart := time.Now()
 	if err := runTM(); err != nil {
 		logger.Error("eval-runtime-init failed", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("eval-runtime-init completed")
+	tmElapsed := time.Since(tmStart)
+	logger.Info("transfer-manager done", "elapsed_ms", tmElapsed.Milliseconds())
+
+	seqStart := time.Now()
+	if err := run(); err != nil {
+		logger.Error("eval-runtime-init (sequential) failed", "error", err)
+		os.Exit(1)
+	}
+	seqElapsed := time.Since(seqStart)
+	logger.Info("sequential done", "elapsed_ms", seqElapsed.Milliseconds())
+
+	logger.Info("comparison", "transfer_manager_ms", tmElapsed.Milliseconds(), "sequential_ms", seqElapsed.Milliseconds(), "speedup", fmt.Sprintf("%.2fx", float64(seqElapsed)/float64(tmElapsed)))
 }
 
 // run is the original sequential implementation using GetObject.
