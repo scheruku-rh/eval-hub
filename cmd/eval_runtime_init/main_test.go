@@ -95,7 +95,7 @@ func TestDownloadObjectRejectsInvalidKey(t *testing.T) {
 
 	_, err = downloadObjectTM(context.Background(), transfermanager.New(nil), destRoot, "bucket", "datasets/run-1", "datasets/run-1/../../etc/passwd")
 	if err == nil {
-		t.Fatal("downloadObject() = nil, want relative path error")
+		t.Fatal("downloadObjectTM() = nil, want relative path error")
 	}
 }
 

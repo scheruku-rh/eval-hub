@@ -35,14 +35,114 @@ const (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
-	if err := run(); err != nil {
+	if err := runTM(); err != nil {
 		logger.Error("eval-runtime-init failed", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("eval-runtime-init completed")
 }
 
+// run is the original sequential implementation using GetObject.
 func run() error {
+	bucket := strings.TrimSpace(os.Getenv(envBucket))
+	keyPrefix := strings.TrimSpace(os.Getenv(envKey))
+	if bucket == "" || keyPrefix == "" {
+		return fmt.Errorf("%s and %s are required", envBucket, envKey)
+	}
+
+	keyPrefix = strings.TrimPrefix(keyPrefix, "/")
+	timeout := defaultTimeout
+	if raw := strings.TrimSpace(os.Getenv(envTimeout)); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("invalid %s: %w", envTimeout, err)
+		}
+		timeout = parsed
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	accessKey := readSecret(accessKeyIDKey)
+	secretKey := readSecret(secretAccessKey)
+	region := readSecret(regionOptionalKey)
+	endpoint := readSecret(endpointKey)
+
+	if accessKey == "" {
+		return fmt.Errorf("missing required secret %s", accessKeyIDKey)
+	}
+	if secretKey == "" {
+		return fmt.Errorf("missing required secret %s", secretAccessKey)
+	}
+	if region == "" {
+		return fmt.Errorf("missing required secret %s", regionOptionalKey)
+	}
+	if endpoint == "" {
+		return fmt.Errorf("missing required secret %s", endpointKey)
+	}
+
+	cfg, err := loadAWSConfig(ctx, region, accessKey, secretKey)
+	if err != nil {
+		return err
+	}
+
+	client := s3.NewFromConfig(cfg, func(options *s3.Options) {
+		if endpoint != "" {
+			options.BaseEndpoint = aws.String(endpoint)
+			options.UsePathStyle = true
+		}
+	})
+
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
+		return fmt.Errorf("create dest dir: %w", err)
+	}
+
+	destRoot, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("open dest root: %w", err)
+	}
+	defer func() { _ = destRoot.Close() }()
+
+	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
+
+	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(keyPrefix),
+	})
+
+	found := false
+	var fileCount int64
+	var totalBytes int64
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("list objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			if obj.Key == nil || *obj.Key == "" {
+				continue
+			}
+			if strings.HasSuffix(*obj.Key, "/") {
+				continue
+			}
+			found = true
+			written, err := downloadObject(ctx, client, destRoot, bucket, keyPrefix, *obj.Key)
+			if err != nil {
+				return err
+			}
+			fileCount++
+			totalBytes += written
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
+	}
+	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024))
+	return nil
+}
+
+// runTM is the Transfer Manager equivalent of run().
+func runTM() error {
 	bucket := strings.TrimSpace(os.Getenv(envBucket))
 	keyPrefix := strings.TrimSpace(os.Getenv(envKey))
 	if bucket == "" || keyPrefix == "" {
@@ -92,90 +192,52 @@ func run() error {
 	})
 	tm := transfermanager.New(client)
 
-	paginator := func() *s3.ListObjectsV2Paginator {
-		return s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-			Bucket: aws.String(bucket),
-			Prefix: aws.String(keyPrefix),
-		})
-	}
-
-	// --- sequential pass (GetObject) — timing only, writes to temp dir ---
-	seqDir, err := os.MkdirTemp("", "eval-init-seq-*")
-	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(seqDir) }()
-	seqRoot, err := os.OpenRoot(seqDir)
-	if err != nil {
-		return fmt.Errorf("open seq root: %w", err)
-	}
-
-	slog.Info("sequential: starting", "bucket", bucket, "key", keyPrefix)
-	seqStart := time.Now()
-	var seqFiles, seqBytes int64
-	found := false
-	for p := paginator(); p.HasMorePages(); {
-		page, err := p.NextPage(ctx)
-		if err != nil {
-			_ = seqRoot.Close()
-			return fmt.Errorf("list objects: %w", err)
-		}
-		for _, obj := range page.Contents {
-			if obj.Key == nil || *obj.Key == "" || strings.HasSuffix(*obj.Key, "/") {
-				continue
-			}
-			found = true
-			n, err := downloadObject(ctx, client, seqRoot, bucket, keyPrefix, *obj.Key)
-			if err != nil {
-				_ = seqRoot.Close()
-				return err
-			}
-			seqFiles++
-			seqBytes += n
-		}
-	}
-	_ = seqRoot.Close()
-	seqElapsed := time.Since(seqStart)
-	slog.Info("sequential: done", "files", seqFiles, "mb", seqBytes/(1024*1024), "elapsed_ms", seqElapsed.Milliseconds())
-
-	if !found {
-		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
-	}
-
-	// --- transfer manager pass — writes to actual destDir ---
 	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return fmt.Errorf("create dest dir: %w", err)
 	}
+
 	destRoot, err := os.OpenRoot(destDir)
 	if err != nil {
 		return fmt.Errorf("open dest root: %w", err)
 	}
 	defer func() { _ = destRoot.Close() }()
 
-	slog.Info("transfer-manager: starting", "bucket", bucket, "key", keyPrefix)
-	tmStart := time.Now()
-	var tmFiles, tmBytes int64
-	for p := paginator(); p.HasMorePages(); {
-		page, err := p.NextPage(ctx)
+	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
+
+	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(keyPrefix),
+	})
+
+	found := false
+	var fileCount int64
+	var totalBytes int64
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			return fmt.Errorf("list objects: %w", err)
 		}
 		for _, obj := range page.Contents {
-			if obj.Key == nil || *obj.Key == "" || strings.HasSuffix(*obj.Key, "/") {
+			if obj.Key == nil || *obj.Key == "" {
 				continue
 			}
-			n, err := downloadObjectTM(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
+			if strings.HasSuffix(*obj.Key, "/") {
+				continue
+			}
+			found = true
+			written, err := downloadObjectTM(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
 			if err != nil {
 				return err
 			}
-			tmFiles++
-			tmBytes += n
+			fileCount++
+			totalBytes += written
 		}
 	}
-	tmElapsed := time.Since(tmStart)
-	slog.Info("transfer-manager: done", "files", tmFiles, "mb", tmBytes/(1024*1024), "elapsed_ms", tmElapsed.Milliseconds())
 
-	slog.Info("comparison", "sequential_ms", seqElapsed.Milliseconds(), "transfer_manager_ms", tmElapsed.Milliseconds(), "speedup", fmt.Sprintf("%.2fx", float64(seqElapsed)/float64(tmElapsed)))
+	if !found {
+		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
+	}
+	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024))
 	return nil
 }
 
@@ -197,6 +259,7 @@ func loadAWSConfig(ctx context.Context, region, accessKey, secretKey string) (aw
 	return cfg, nil
 }
 
+// downloadObject downloads a single object using the original sequential GetObject.
 func downloadObject(ctx context.Context, client *s3.Client, destRoot *os.Root, bucket, prefix, key string) (int64, error) {
 	rel, err := relativeDestPath(prefix, key)
 	if err != nil {
@@ -230,6 +293,7 @@ func downloadObject(ctx context.Context, client *s3.Client, destRoot *os.Root, b
 	return written, nil
 }
 
+// downloadObjectTM downloads a single object using the S3 Transfer Manager.
 func downloadObjectTM(ctx context.Context, tm *transfermanager.Client, destRoot *os.Root, bucket, prefix, key string) (int64, error) {
 	rel, err := relativeDestPath(prefix, key)
 	if err != nil {
