@@ -25,6 +25,7 @@ const (
 	envTimeout        = "TEST_DATA_S3_TIMEOUT"
 	secretDir         = "/var/run/secrets/test-data" // #nosec G101 -- K8s secret mount path
 	destDir           = "/test_data"
+	seqDestDir        = "/test_data_seq"
 	regionOptionalKey = "AWS_DEFAULT_REGION"
 	endpointKey       = "AWS_S3_ENDPOINT"
 	accessKeyIDKey    = "AWS_ACCESS_KEY_ID"
@@ -105,11 +106,11 @@ func run() error {
 		}
 	})
 
-	if err := os.MkdirAll(destDir, 0o750); err != nil {
+	if err := os.MkdirAll(seqDestDir, 0o750); err != nil {
 		return fmt.Errorf("create dest dir: %w", err)
 	}
 
-	destRoot, err := os.OpenRoot(destDir)
+	destRoot, err := os.OpenRoot(seqDestDir)
 	if err != nil {
 		return fmt.Errorf("open dest root: %w", err)
 	}
