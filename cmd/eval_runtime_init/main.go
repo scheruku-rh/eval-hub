@@ -114,6 +114,7 @@ func run() error {
 	defer func() { _ = destRoot.Close() }()
 
 	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
+	start := time.Now()
 
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
@@ -148,7 +149,7 @@ func run() error {
 	if !found {
 		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
 	}
-	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024))
+	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024), "elapsed_ms", time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -214,6 +215,7 @@ func runTM() error {
 	defer func() { _ = destRoot.Close() }()
 
 	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
+	start := time.Now()
 
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
@@ -248,7 +250,7 @@ func runTM() error {
 	if !found {
 		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
 	}
-	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024))
+	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024), "elapsed_ms", time.Since(start).Milliseconds())
 	return nil
 }
 
