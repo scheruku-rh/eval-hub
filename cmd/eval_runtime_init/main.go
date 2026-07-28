@@ -55,6 +55,7 @@ func main() {
 
 // run is the original sequential implementation using GetObject.
 func run() error {
+	start := time.Now()
 	bucket := strings.TrimSpace(os.Getenv(envBucket))
 	keyPrefix := strings.TrimSpace(os.Getenv(envKey))
 	if bucket == "" || keyPrefix == "" {
@@ -114,7 +115,6 @@ func run() error {
 	defer func() { _ = destRoot.Close() }()
 
 	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
-	start := time.Now()
 
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
@@ -155,6 +155,7 @@ func run() error {
 
 // runTM is the Transfer Manager equivalent of run().
 func runTM() error {
+	start := time.Now()
 	bucket := strings.TrimSpace(os.Getenv(envBucket))
 	keyPrefix := strings.TrimSpace(os.Getenv(envKey))
 	if bucket == "" || keyPrefix == "" {
@@ -215,7 +216,6 @@ func runTM() error {
 	defer func() { _ = destRoot.Close() }()
 
 	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
-	start := time.Now()
 
 	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
