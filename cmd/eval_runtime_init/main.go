@@ -92,52 +92,90 @@ func run() error {
 	})
 	tm := transfermanager.New(client)
 
+	paginator := func() *s3.ListObjectsV2Paginator {
+		return s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String(keyPrefix),
+		})
+	}
+
+	// --- sequential pass (GetObject) — timing only, writes to temp dir ---
+	seqDir, err := os.MkdirTemp("", "eval-init-seq-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(seqDir) }()
+	seqRoot, err := os.OpenRoot(seqDir)
+	if err != nil {
+		return fmt.Errorf("open seq root: %w", err)
+	}
+
+	slog.Info("sequential: starting", "bucket", bucket, "key", keyPrefix)
+	seqStart := time.Now()
+	var seqFiles, seqBytes int64
+	found := false
+	for p := paginator(); p.HasMorePages(); {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			_ = seqRoot.Close()
+			return fmt.Errorf("list objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			if obj.Key == nil || *obj.Key == "" || strings.HasSuffix(*obj.Key, "/") {
+				continue
+			}
+			found = true
+			n, err := downloadObject(ctx, client, seqRoot, bucket, keyPrefix, *obj.Key)
+			if err != nil {
+				_ = seqRoot.Close()
+				return err
+			}
+			seqFiles++
+			seqBytes += n
+		}
+	}
+	_ = seqRoot.Close()
+	seqElapsed := time.Since(seqStart)
+	slog.Info("sequential: done", "files", seqFiles, "mb", seqBytes/(1024*1024), "elapsed_ms", seqElapsed.Milliseconds())
+
+	if !found {
+		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
+	}
+
+	// --- transfer manager pass — writes to actual destDir ---
 	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return fmt.Errorf("create dest dir: %w", err)
 	}
-
 	destRoot, err := os.OpenRoot(destDir)
 	if err != nil {
 		return fmt.Errorf("open dest root: %w", err)
 	}
 	defer func() { _ = destRoot.Close() }()
 
-	slog.Info("starting download", "bucket", bucket, "key", keyPrefix)
-
-	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket),
-		Prefix: aws.String(keyPrefix),
-	})
-
-	found := false
-	var fileCount int64
-	var totalBytes int64
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+	slog.Info("transfer-manager: starting", "bucket", bucket, "key", keyPrefix)
+	tmStart := time.Now()
+	var tmFiles, tmBytes int64
+	for p := paginator(); p.HasMorePages(); {
+		page, err := p.NextPage(ctx)
 		if err != nil {
 			return fmt.Errorf("list objects: %w", err)
 		}
 		for _, obj := range page.Contents {
-			if obj.Key == nil || *obj.Key == "" {
+			if obj.Key == nil || *obj.Key == "" || strings.HasSuffix(*obj.Key, "/") {
 				continue
 			}
-			if strings.HasSuffix(*obj.Key, "/") {
-				continue
-			}
-			found = true
-			written, err := downloadObjectTM(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
+			n, err := downloadObjectTM(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
 			if err != nil {
 				return err
 			}
-			fileCount++
-			totalBytes += written
+			tmFiles++
+			tmBytes += n
 		}
 	}
+	tmElapsed := time.Since(tmStart)
+	slog.Info("transfer-manager: done", "files", tmFiles, "mb", tmBytes/(1024*1024), "elapsed_ms", tmElapsed.Milliseconds())
 
-	if !found {
-		return fmt.Errorf("no objects found for s3://%s/%s", bucket, keyPrefix)
-	}
-	slog.Info("download complete", "files", fileCount, "mb", totalBytes/(1024*1024))
+	slog.Info("comparison", "sequential_ms", seqElapsed.Milliseconds(), "transfer_manager_ms", tmElapsed.Milliseconds(), "speedup", fmt.Sprintf("%.2fx", float64(seqElapsed)/float64(tmElapsed)))
 	return nil
 }
 
