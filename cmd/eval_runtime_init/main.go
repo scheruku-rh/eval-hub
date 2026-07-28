@@ -38,12 +38,12 @@ func main() {
 	slog.SetDefault(logger)
 
 	var err error
-	if strings.TrimSpace(os.Getenv(envInitMode)) == "tm" {
-		logger.Info("mode: transfer-manager")
-		err = runTM()
-	} else {
+	if strings.TrimSpace(os.Getenv(envInitMode)) == "sequential" {
 		logger.Info("mode: sequential")
 		err = run()
+	} else {
+		logger.Info("mode: transfer-manager")
+		err = runTM()
 	}
 
 	if err != nil {
