@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path"
@@ -89,7 +90,6 @@ func run() error {
 			options.UsePathStyle = true
 		}
 	})
-
 	tm := transfermanager.New(client)
 
 	if err := os.MkdirAll(destDir, 0o750); err != nil {
@@ -125,7 +125,7 @@ func run() error {
 				continue
 			}
 			found = true
-			written, err := downloadObject(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
+			written, err := downloadObjectTM(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
 			if err != nil {
 				return err
 			}
@@ -159,7 +159,40 @@ func loadAWSConfig(ctx context.Context, region, accessKey, secretKey string) (aw
 	return cfg, nil
 }
 
-func downloadObject(ctx context.Context, tm *transfermanager.Client, destRoot *os.Root, bucket, prefix, key string) (int64, error) {
+func downloadObject(ctx context.Context, client *s3.Client, destRoot *os.Root, bucket, prefix, key string) (int64, error) {
+	rel, err := relativeDestPath(prefix, key)
+	if err != nil {
+		return 0, err
+	}
+
+	if dir := path.Dir(rel); dir != "." {
+		if err := destRoot.MkdirAll(dir, 0o750); err != nil {
+			return 0, fmt.Errorf("create dir for %q: %w", key, err)
+		}
+	}
+
+	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("get object %q: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	file, err := destRoot.Create(rel)
+	if err != nil {
+		return 0, fmt.Errorf("create file %q: %w", key, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	written, err := io.Copy(file, resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("write file %q: %w", key, err)
+	}
+	return written, nil
+}
+
+func downloadObjectTM(ctx context.Context, tm *transfermanager.Client, destRoot *os.Root, bucket, prefix, key string) (int64, error) {
 	rel, err := relativeDestPath(prefix, key)
 	if err != nil {
 		return 0, err

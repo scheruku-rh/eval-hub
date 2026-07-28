@@ -93,7 +93,7 @@ func TestDownloadObjectRejectsInvalidKey(t *testing.T) {
 	}
 	defer func() { _ = destRoot.Close() }()
 
-	_, err = downloadObject(context.Background(), transfermanager.New(nil), destRoot, "bucket", "datasets/run-1", "datasets/run-1/../../etc/passwd")
+	_, err = downloadObjectTM(context.Background(), transfermanager.New(nil), destRoot, "bucket", "datasets/run-1", "datasets/run-1/../../etc/passwd")
 	if err == nil {
 		t.Fatal("downloadObject() = nil, want relative path error")
 	}
@@ -133,7 +133,7 @@ func TestDownloadObjectWritesNestedFile(t *testing.T) {
 	}
 	defer func() { _ = destRoot.Close() }()
 
-	written, err := downloadObject(ctx, tm, destRoot, "bucket", "data/", objectKey)
+	written, err := downloadObjectTM(ctx, tm, destRoot, "bucket", "data/", objectKey)
 	if err != nil {
 		t.Fatalf("downloadObject() = %v, want nil error", err)
 	}
