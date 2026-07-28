@@ -25,7 +25,7 @@ const (
 	envTimeout        = "TEST_DATA_S3_TIMEOUT"
 	secretDir         = "/var/run/secrets/test-data" // #nosec G101 -- K8s secret mount path
 	destDir           = "/test_data"
-	seqDestDir        = "/test_data_seq"
+	envInitMode       = "TEST_DATA_INIT_MODE"
 	regionOptionalKey = "AWS_DEFAULT_REGION"
 	endpointKey       = "AWS_S3_ENDPOINT"
 	accessKeyIDKey    = "AWS_ACCESS_KEY_ID"
@@ -37,23 +37,20 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	tmStart := time.Now()
-	if err := runTM(); err != nil {
+	var err error
+	if strings.TrimSpace(os.Getenv(envInitMode)) == "tm" {
+		logger.Info("mode: transfer-manager")
+		err = runTM()
+	} else {
+		logger.Info("mode: sequential")
+		err = run()
+	}
+
+	if err != nil {
 		logger.Error("eval-runtime-init failed", "error", err)
 		os.Exit(1)
 	}
-	tmElapsed := time.Since(tmStart)
-	logger.Info("transfer-manager done", "elapsed_ms", tmElapsed.Milliseconds())
-
-	seqStart := time.Now()
-	if err := run(); err != nil {
-		logger.Error("eval-runtime-init (sequential) failed", "error", err)
-		os.Exit(1)
-	}
-	seqElapsed := time.Since(seqStart)
-	logger.Info("sequential done", "elapsed_ms", seqElapsed.Milliseconds())
-
-	logger.Info("comparison", "transfer_manager_ms", tmElapsed.Milliseconds(), "sequential_ms", seqElapsed.Milliseconds(), "speedup", fmt.Sprintf("%.2fx", float64(seqElapsed)/float64(tmElapsed)))
+	logger.Info("eval-runtime-init completed")
 }
 
 // run is the original sequential implementation using GetObject.
@@ -106,11 +103,11 @@ func run() error {
 		}
 	})
 
-	if err := os.MkdirAll(seqDestDir, 0o750); err != nil {
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return fmt.Errorf("create dest dir: %w", err)
 	}
 
-	destRoot, err := os.OpenRoot(seqDestDir)
+	destRoot, err := os.OpenRoot(destDir)
 	if err != nil {
 		return fmt.Errorf("open dest root: %w", err)
 	}
