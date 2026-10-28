@@ -54,6 +54,9 @@ func main() {
 	slog.SetDefault(logger)
 	if err := run(); err != nil {
 		logger.Error("eval-runtime-init failed", "error", err)
+		// Git/S3 (and HF via failHF) must leave a non-empty termination message so
+		// eval-hub can surface timeout/init failures instead of an empty message=.
+		reportInitFailure(err)
 		os.Exit(1)
 	}
 	logger.Info("eval-runtime-init completed")
@@ -145,7 +148,7 @@ func runS3() error {
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return fmt.Errorf("list objects: %w", err)
+			return wrapInitTimeout("s3 list objects", timeout, fmt.Errorf("list objects: %w", err))
 		}
 		for _, obj := range page.Contents {
 			if obj.Key == nil || *obj.Key == "" {
@@ -157,7 +160,7 @@ func runS3() error {
 			found = true
 			written, err := downloadObject(ctx, tm, destRoot, bucket, keyPrefix, *obj.Key)
 			if err != nil {
-				return err
+				return wrapInitTimeout("s3 download", timeout, err)
 			}
 			fileCount++
 			totalBytes += written

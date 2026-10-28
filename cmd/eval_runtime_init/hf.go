@@ -23,16 +23,10 @@ const (
 	hfTokenKey    = "token"
 	// hfCacheDirName is the Hub cache directory under the test-data emptyDir volume.
 	hfCacheDirName = ".hf-cache"
-
-	terminationMessagePath = "/dev/termination-log"
 )
 
 // hfCacheDir overrides the Hub cache location when non-empty (unit tests only).
 var hfCacheDir string
-
-const (
-	maxTerminationMessageBytes = 4096
-)
 
 // runHF downloads a Hugging Face Hub dataset repository into destDir and writes the
 // resolved commit SHA to init metadata for the sidecar (same contract as git init).
@@ -72,7 +66,7 @@ func runHF() error {
 
 	commitSHA, err := downloadHFRepo(ctx, repoID, revision, subPath, token)
 	if err != nil {
-		return failHF(err)
+		return failHF(wrapInitTimeout("huggingface download", timeout, err))
 	}
 
 	if err := writeGitMetadata(commitSHA); err != nil {
@@ -484,39 +478,6 @@ func destHasData(root string) bool {
 
 func failHF(err error) error {
 	slog.Error("hf init failed", "error", err)
-	writeTerminationMessage(err.Error())
+	reportInitFailure(err)
 	return err
-}
-
-func writeTerminationMessage(message string) {
-	text := strings.TrimSpace(message)
-	if text == "" {
-		return
-	}
-	encoded := []byte(text)
-	if len(encoded) > maxTerminationMessageBytes {
-		encoded = encoded[:maxTerminationMessageBytes]
-	}
-	if writeErr := writeTerminationMessageFile(encoded); writeErr != nil {
-		slog.Warn("failed to write termination message", "error", writeErr)
-	}
-}
-
-// writeTerminationMessageFile writes via os.Root so TERMINATION_MESSAGE_PATH cannot escape its directory.
-func writeTerminationMessageFile(content []byte) error {
-	path := strings.TrimSpace(os.Getenv("TERMINATION_MESSAGE_PATH"))
-	if path == "" {
-		path = terminationMessagePath
-	}
-	clean := filepath.Clean(path)
-	dir, name := filepath.Split(clean)
-	if name == "" || name == "." || name == ".." {
-		return fmt.Errorf("invalid termination message path %q", path)
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	return root.WriteFile(name, append(content, '\n'), 0o600)
 }

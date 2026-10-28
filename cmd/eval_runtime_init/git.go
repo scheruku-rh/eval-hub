@@ -77,7 +77,7 @@ func runGit() error {
 
 	commitSHA, err := cloneRef(ctx, cloneDir, repoURL, ref, auth)
 	if err != nil {
-		return err
+		return wrapInitTimeout("git clone", timeout, err)
 	}
 
 	slog.Info("cloned", "commit_sha", commitSHA)
