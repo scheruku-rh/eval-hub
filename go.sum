@@ -164,8 +164,12 @@ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek
 github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
 github.com/gomlx/compute v0.1.27 h1:adKfQQWD/5aZQvtrLuvj3bq2ArjbQ0BlIBtI1TsmzJU=
 github.com/gomlx/compute v0.1.27/go.mod h1:+IyIusGBr70LPqKcULueB2VTTXmJ3HqOdPmRM8O1Sug=
+github.com/gomlx/compute v0.1.28 h1:3o0pCmmg3QzZMMS5PR6nUnyRzEMPXI0uGrzcIP+qpPU=
+github.com/gomlx/compute v0.1.28/go.mod h1:+IyIusGBr70LPqKcULueB2VTTXmJ3HqOdPmRM8O1Sug=
 github.com/gomlx/go-huggingface v0.4.31 h1:5Ors76aBMzafZqesApp+aiW3RA8/lhEGVPHnbTWN0lY=
 github.com/gomlx/go-huggingface v0.4.31/go.mod h1:P1CG7KTnoQXz9fVW4Uw9cZ0CM18X+vyEyHs7L8gso3Q=
+github.com/gomlx/go-huggingface v0.4.32 h1:bw/nY5FAgVWTVX7ZOxsK6FhGn/hz2CdwKax00heFpBw=
+github.com/gomlx/go-huggingface v0.4.32/go.mod h1:H+VXf59NxO35kKu2sUQnmcQgx0J3HkpejALhkGG2wbo=
 github.com/google/gnostic-models v0.7.1 h1:SisTfuFKJSKM5CPZkffwi6coztzzeYUhc3v4yxLWH8c=
 github.com/google/gnostic-models v0.7.1/go.mod h1:whL5G0m6dmc5cPxKc5bdKdEN3UjI7OUGxBlw57miDrQ=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=

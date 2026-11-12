@@ -31,6 +31,7 @@ func TestDownloadHFRepoRejectsCacheOnlyData(t *testing.T) {
 type hfRepoInfoResponse struct {
 	ID       string `json:"id"`
 	SHA      string `json:"sha"`
+	CardData any    `json:"cardData,omitempty"`
 	Siblings []struct {
 		RFilename string `json:"rfilename"`
 	} `json:"siblings"`
@@ -41,6 +42,10 @@ func newMockHFServer(t *testing.T, repoID string, files map[string]string, infoS
 }
 
 func newMockHFServerWithSHA(t *testing.T, repoID, commitSHA string, files map[string]string, infoStatus int) *httptest.Server {
+	return newMockHFServerWithSHAAndCardData(t, repoID, commitSHA, files, infoStatus, nil)
+}
+
+func newMockHFServerWithSHAAndCardData(t *testing.T, repoID, commitSHA string, files map[string]string, infoStatus int, cardData any) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/api/datasets/"+repoID+"/revision/") {
@@ -48,7 +53,7 @@ func newMockHFServerWithSHA(t *testing.T, repoID, commitSHA string, files map[st
 				http.Error(w, "gated", infoStatus)
 				return
 			}
-			resp := hfRepoInfoResponse{ID: repoID, SHA: commitSHA}
+			resp := hfRepoInfoResponse{ID: repoID, SHA: commitSHA, CardData: cardData}
 			for name := range files {
 				resp.Siblings = append(resp.Siblings, struct {
 					RFilename string `json:"rfilename"`
@@ -456,6 +461,28 @@ func TestRunHF_WithRevisionAndToken(t *testing.T) {
 	}
 	if !destHasData(dest) {
 		t.Fatal("expected staged data")
+	}
+}
+
+func TestDownloadHFRepoAcceptsLicenseArrayCardData(t *testing.T) {
+	repoID := "org/license-array"
+	files := map[string]string{"data.jsonl": "line\n"}
+	cardData := map[string]any{"license": []string{"bigcode-openrail-m", "apache-2.0"}}
+	srv := newMockHFServerWithSHAAndCardData(t, repoID, testHFCommitSHA, files, http.StatusOK, cardData)
+	defer srv.Close()
+
+	t.Setenv("HF_ENDPOINT", srv.URL)
+	d := downloader{destDir: t.TempDir(), hfCacheDir: t.TempDir()}
+
+	commitSHA, err := d.downloadHFRepo(context.Background(), repoID, "main", "", "")
+	if err != nil {
+		t.Fatalf("downloadHFRepo() error = %v", err)
+	}
+	if commitSHA != testHFCommitSHA {
+		t.Fatalf("commit SHA = %q, want %q", commitSHA, testHFCommitSHA)
+	}
+	if _, err := os.Stat(filepath.Join(d.destDir, "data.jsonl")); err != nil {
+		t.Fatalf("expected staged data file: %v", err)
 	}
 }
 
