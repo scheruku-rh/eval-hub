@@ -9,7 +9,7 @@ import (
 // sidecarForJobPod builds sidecar_config.json for the job ConfigMap from server
 // sidecar YAML plus per-job fields. Omits sidecar_container (image/resources); that is only for job spec.
 func sidecarForJobPod(cfg *config.Config, jc *jobConfig) (*config.SidecarConfig, error) {
-	if cfg != nil && cfg.Sidecar == nil && jc != nil && jc.evalHubURL == "" && jc.mlflowTrackingURI == "" && jc.modelTargetURL == "" && !hasGitTestData(jc) && !hasHFTestData(jc) {
+	if cfg != nil && cfg.Sidecar == nil && jc != nil && jc.evalHubURL == "" && jc.mlflowTrackingURI == "" && jc.modelTargetURL == "" && jc.modelAuthSecretRef == "" && !hasGitTestData(jc) && !hasHFTestData(jc) {
 		return nil, nil
 	}
 
@@ -47,7 +47,7 @@ func sidecarForJobPod(cfg *config.Config, jc *jobConfig) (*config.SidecarConfig,
 			}
 			export.MLFlow.CACertPath = mlflowCACertPathForJob(jc, cfg)
 		}
-		if jc.modelTargetURL != "" {
+		if jc.modelTargetURL != "" || jc.modelAuthSecretRef != "" {
 			mc := &config.SidecarModelConfig{
 				URL:         jc.modelTargetURL,
 				HTTPTimeout: shared.DefaultModelHTTPTimeout,

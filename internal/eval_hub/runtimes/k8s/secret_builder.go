@@ -27,6 +27,16 @@ func isModelCredentialKey(k string) bool {
 		strings.HasSuffix(k, modelURLSuffix)
 }
 
+// hasModelRoleURL reports whether the Secret declares a role endpoint.
+func hasModelRoleURL(data map[string][]byte) bool {
+	for key, value := range data {
+		if strings.HasSuffix(key, modelURLSuffix) && strings.TrimSpace(string(value)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // modelSecretInfo holds the result of inspecting the model credential secret.
 type modelSecretInfo struct {
 	// hasCredentialKeys is true when the secret contains at least one proxy-injectable

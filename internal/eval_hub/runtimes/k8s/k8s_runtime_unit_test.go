@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -2672,6 +2673,7 @@ func TestModelAuthCombinations(t *testing.T) {
 		secretData      map[string][]byte // nil = open model (no model.auth); use wantErr for missing-secret case
 		wantErr         bool
 		wantErrContains string // when wantErr=true, assert error message contains this substring
+		emptyModelURL   bool   // submit an empty model URL (pre-recorded-data job)
 
 		wantInternalRefSecret     bool
 		wantModelAuthVol          bool
@@ -2680,6 +2682,8 @@ func TestModelAuthCombinations(t *testing.T) {
 		wantInternalRefFirstSrc   bool // internalRef must be sources[0]
 		wantRealSecretOptional    bool // real-secret projection must have optional:true
 		wantAuthMountInSidecarCfg bool
+		wantSecretBackedProxy     bool
+		missingAuthSecret         bool
 		refKeys                   []refSecretExpect
 		passthroughItemKeys       []string // keys that must appear in real-secret Items
 	}{
@@ -2713,6 +2717,95 @@ func TestModelAuthCombinations(t *testing.T) {
 			// there is no model endpoint to authenticate with.
 			name:    "whitespace-only model URL with auth",
 			wantErr: false,
+		},
+		{
+			// Pre-recorded-data job whose auth secret declares a judge endpoint:
+			// the sidecar requires a role reference, the internal ref secret
+			// maps judge_url to the sidecar, and the job spec's model URL stays
+			// empty for judge-aware adapters. Any <role>_url prefix is honored;
+			// judge_url is just the common case.
+			name:          "empty model URL with judge_url",
+			emptyModelURL: true,
+			secretData: map[string][]byte{
+				"judge_api-key": []byte("sk-judge"),
+				"judge_url":     []byte("https://judge.example.com/v1"),
+			},
+			wantInternalRefSecret:     true,
+			wantModelAuthVol:          true,
+			wantModelInternalAuthVol:  true,
+			wantProjectedSources:      2,
+			wantInternalRefFirstSrc:   true,
+			wantRealSecretOptional:    true,
+			wantAuthMountInSidecarCfg: true,
+			wantSecretBackedProxy:     true,
+			refKeys: []refSecretExpect{
+				{"judge_api-key", "judge_api-key:ref"},
+				{"judge_url", "http://localhost:8080/v1"},
+			},
+		},
+		{
+			// Pre-recorded-data job whose auth secret declares an arbitrary role
+			// pair: any <prefix>_url / <prefix>_api-key combination activates the
+			// pipeline, not just judge_url.
+			name:          "empty model URL with arbitrary role url",
+			emptyModelURL: true,
+			secretData: map[string][]byte{
+				"some_other_model_api-key": []byte("sk-other"),
+				"some_other_model_url":     []byte("https://some-other.example.com/v1"),
+			},
+			wantInternalRefSecret:     true,
+			wantModelAuthVol:          true,
+			wantModelInternalAuthVol:  true,
+			wantProjectedSources:      2,
+			wantInternalRefFirstSrc:   true,
+			wantRealSecretOptional:    true,
+			wantAuthMountInSidecarCfg: true,
+			wantSecretBackedProxy:     true,
+			refKeys: []refSecretExpect{
+				{"some_other_model_api-key", "some_other_model_api-key:ref"},
+				{"some_other_model_url", "http://localhost:8080/v1"},
+			},
+		},
+		{
+			// Pre-recorded-data job whose auth secret declares multiple role
+			// endpoints: every <role>_url and <role>_api-key lands in the internal
+			// ref secret without configuring a default target.
+			name:          "empty model URL with multiple role urls",
+			emptyModelURL: true,
+			secretData: map[string][]byte{
+				"grader_api-key": []byte("sk-grader"),
+				"grader_url":     []byte("https://grader.example.com/v1"),
+				"judge_api-key":  []byte("sk-judge"),
+				"judge_url":      []byte("https://judge.example.com/v1"),
+			},
+			wantInternalRefSecret:     true,
+			wantModelAuthVol:          true,
+			wantModelInternalAuthVol:  true,
+			wantProjectedSources:      2,
+			wantInternalRefFirstSrc:   true,
+			wantRealSecretOptional:    true,
+			wantAuthMountInSidecarCfg: true,
+			wantSecretBackedProxy:     true,
+			refKeys: []refSecretExpect{
+				{"grader_api-key", "grader_api-key:ref"},
+				{"grader_url", "http://localhost:8080/v1"},
+				{"judge_api-key", "judge_api-key:ref"},
+				{"judge_url", "http://localhost:8080/v1"},
+			},
+		},
+		{
+			// Empty model URL with an auth secret that declares no <role>_url: the
+			// model auth pipeline stays off, exactly as before <role>_url support.
+			name:          "empty model URL with auth but no role url",
+			emptyModelURL: true,
+			secretData: map[string][]byte{
+				"api-key": []byte("sk-real"),
+			},
+		},
+		{
+			name:              "empty model URL with missing auth secret",
+			emptyModelURL:     true,
+			missingAuthSecret: true,
 		},
 		{
 			name: "api-key only",
@@ -2897,6 +2990,9 @@ func TestModelAuthCombinations(t *testing.T) {
 			providerID := "provider-1"
 			evaluation := sampleEvaluation(providerID)
 			evaluation.Model.URL = modelURL
+			if tc.emptyModelURL {
+				evaluation.Model.URL = ""
+			}
 
 			var clientset *fake.Clientset
 			if tc.name == "empty model URL" {
@@ -2912,7 +3008,7 @@ func TestModelAuthCombinations(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: "default"},
 					Data:       map[string][]byte{"api-key": []byte("sk-real")},
 				})
-			} else if tc.wantErr {
+			} else if tc.wantErr || tc.missingAuthSecret {
 				// secret_ref set but secret absent from fake store → error expected
 				evaluation.Model.Auth = &api.ModelAuth{SecretRef: secretName}
 				clientset = fake.NewClientset()
@@ -2971,6 +3067,23 @@ func TestModelAuthCombinations(t *testing.T) {
 				// sidecar_config.json: real URL present; auth_secret_mount_path conditional
 				if !strings.Contains(sidecarCfg, "model.example.com") {
 					t.Errorf("sidecar_config.json must contain the real model URL, got: %s", sidecarCfg)
+				}
+			} else if tc.wantSecretBackedProxy {
+				var sidecar config.SidecarConfig
+				if err := json.Unmarshal([]byte(sidecarCfg), &sidecar); err != nil {
+					t.Fatalf("unmarshal sidecar config: %v", err)
+				}
+				if sidecar.Model == nil || sidecar.Model.AuthSecretMountPath == "" || sidecar.Model.URL != "" {
+					t.Fatal("expected Secret-backed proxy without a default URL")
+				}
+				// the job spec's model URL stays empty: role-aware adapters resolve
+				// the endpoint from <role>_url in the internal ref secret
+				var jobSpec shared.JobSpec
+				if err := json.Unmarshal([]byte(cm.Data["job.json"]), &jobSpec); err != nil {
+					t.Fatalf("unmarshal job.json: %v", err)
+				}
+				if jobSpec.Model == nil || jobSpec.Model.URL != "" {
+					t.Errorf("job.json model URL must stay empty for role-endpoint-only jobs, got: %+v", jobSpec.Model)
 				}
 			} else {
 				// pre-recorded-data jobs: no sidecar model proxy configured

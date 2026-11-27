@@ -81,7 +81,7 @@ type jobConfig struct {
 	modelAuthSecretRef         string // user's real credentials secret mounted only in sidecar
 	generationWorkload         bool   // generation runner receives no real model Secret projection
 	modelInternalRefSecretName string // ephemeral internalModelRef secret mounted in adapter; empty when credential injection is not active
-	modelTargetURL             string // real model URL forwarded by the sidecar model proxy; empty for pre-recorded-data jobs
+	modelTargetURL             string // explicit primary model URL forwarded by the sidecar
 	sidecarResources           corev1.ResourceRequirements
 	testDataS3                 s3TestDataConfig
 	testDataPVC                pvcTestDataConfig
@@ -260,9 +260,14 @@ func buildJobConfig(evaluation *api.EvaluationJobResource, provider *api.Provide
 	// pre-recorded-data jobs where no live model endpoint is needed.
 	modelTargetURL := strings.TrimSpace(evaluation.Model.URL)
 
-	// Model auth is only relevant when there is a model URL to authenticate with.
+	// Model auth authenticates the model URL or, for a pre-recorded-data job whose
+	// model URL is empty, the role endpoints the secret declares under <role>_url
+	// keys (any prefix: judge_url, grader_url, sdg_url, ...). Whether the secret
+	// actually declares one is only known once it can be read, in
+	// createBenchmarkResources: without a <role>_url the ref is reset there and
+	// the model auth pipeline stays off, exactly as before.
 	modelAuthSecretRef := ""
-	if modelTargetURL != "" && evaluation.Model.Auth != nil {
+	if evaluation.Model.Auth != nil {
 		modelAuthSecretRef = strings.TrimSpace(evaluation.Model.Auth.SecretRef)
 	}
 

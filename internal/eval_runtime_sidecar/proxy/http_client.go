@@ -195,7 +195,7 @@ func NewModelHTTPClient(serviceConfig *config.Config, isOTELEnabled bool, logger
 		targetURL = mc.URL
 	}
 	var tlsConfig *tls.Config
-	if caCertPath != "" || schemeRequiresTLS(targetURL) {
+	if caCertPath != "" || schemeRequiresTLS(targetURL) || (mc != nil && targetURL == "" && mc.AuthSecretMountPath != "") {
 		var err error
 		tlsConfig, err = buildTLSConfig(caCertPath, insecureSkipVerify, logger, "Model")
 		if err != nil {

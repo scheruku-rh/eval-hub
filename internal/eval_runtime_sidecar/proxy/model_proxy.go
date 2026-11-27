@@ -65,25 +65,15 @@ func loggerForRequest(logger *slog.Logger, req *http.Request) *slog.Logger {
 // in-memory cache. The mount is a static Kubernetes secret volume — files do not change
 // for the pod's lifetime — so per-request file reads are unnecessary.
 //
-// Per-request behaviour:
-//  1. If the Authorization header carries a ref token (e.g. "Bearer kfp_sa_token:ref"):
-//     a. The credential is looked up from the in-memory cache by key name.
-//     b. For *_api-key keys: credential must be non-empty; upstream URL comes from *_url.
-//     c. For *_sa_token keys: when the secret value is empty the SA token from saTokenPath is
-//     injected instead — this is the KFP path (kfp_sa_token: "" in the secret, SA injected).
-//     d. The upstream URL is looked up from the cache under *_url for both suffixes;
-//     falls back to defaultTarget when absent.
-//  2. If resolution fails (key not in cache, path traversal, empty _api-key) the proxy
-//     returns HTTP 400 to the eval container — the request is never forwarded.
-//  3. If the Authorization header carries an explicit hardcoded token ("Bearer token:<secret>"),
-//     the "token:" prefix is stripped and the remainder is forwarded as the Bearer token.
-//  4. Otherwise the SA token from saTokenPath is always injected, replacing any adapter-sent
-//     placeholder (e.g. "Bearer local" from OPENAI_API_KEY workarounds) or absent/empty auth.
-//     The adapter cannot read the SA token (pod-level auto-mount is disabled); the sidecar
-//     injects it on its behalf.
-//  5. Resolved credentials are forwarded on both HTTP and HTTPS upstreams. In-cluster model
-//     endpoints are often plain HTTP but still require SA or secret-backed auth; stripping
-//     Authorization on HTTP caused 401s for those services.
+// A credential reference such as "Bearer judge_api-key:ref" resolves to the
+// cached credential and its matching endpoint (judge_url). An empty *_sa_token
+// entry uses the Pod's service account token.
+//
+// With a default target, requests can fall back to that target and use an
+// explicit "Bearer token:<secret>" or the injected service account token.
+// Without a default target, requests must carry a credential reference with
+// a matching HTTP or HTTPS endpoint. Failed resolution returns HTTP 400
+// without forwarding the request.
 func NewModelReverseProxy(defaultTarget *url.URL, client *http.Client, logger *slog.Logger, secretMountPath, saTokenPath string) *httputil.ReverseProxy {
 	secretCache := loadSecretCache(secretMountPath, logger)
 
@@ -110,14 +100,13 @@ func NewModelReverseProxy(defaultTarget *url.URL, client *http.Client, logger *s
 			if err != nil {
 				// Signal the RoundTripper to return 400 without forwarding.
 				pr.Out.Header.Set(xModelAuthError, err.Error())
-				pr.Out.URL.Scheme = defaultTarget.Scheme
-				pr.Out.URL.Host = defaultTarget.Host
-				pr.Out.Host = defaultTarget.Host
-				pr.Out.RequestURI = ""
 				return
 			}
 			target = resolvedTarget
 			credential = realToken
+		case defaultTarget == nil:
+			pr.Out.Header.Set(xModelAuthError, "a role credential reference is required")
+			return
 		case isExplicitHardcodedToken(authHeader):
 			if tok := extractExplicitHardcodedToken(authHeader); tok != "" {
 				credential = tok
@@ -315,6 +304,9 @@ func resolveModelCredential(logger *slog.Logger, authHeader string, secretCache 
 	}
 
 	target := resolveUpstreamURL(logger, key, secretCache, defaultTarget)
+	if target == nil {
+		return nil, "", fmt.Errorf("no valid upstream URL for credential key %q", key)
+	}
 	logger.Info("Resolved model ref token", "key", key, "target_host", target.Host)
 	return target, realToken, nil
 }
@@ -339,7 +331,7 @@ func resolveUpstreamURL(logger *slog.Logger, key string, secretCache map[string]
 		return defaultTarget
 	}
 	parsed, err := url.Parse(strings.TrimSuffix(rawURL, "/"))
-	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || (defaultTarget == nil && parsed.Scheme != "http" && parsed.Scheme != "https") {
 		logger.Warn("service URL in secret cache is invalid, using default target",
 			"url_key", urlKey, "error", err)
 		return defaultTarget

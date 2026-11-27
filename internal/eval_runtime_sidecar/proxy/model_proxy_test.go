@@ -786,3 +786,48 @@ func TestModelProxySATokenUnavailableOnHTTPS(t *testing.T) {
 		t.Fatalf("logs = %q, want SA token unavailable warning", logBuf.String())
 	}
 }
+
+func TestModelProxyWithoutDefaultRequiresMatchingEndpoint(t *testing.T) {
+	requests := make(chan string, 4)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	secretDir := t.TempDir()
+	for key, value := range map[string]string{
+		"judge_url":      upstream.URL,
+		"judge_api-key":  "judge-key",
+		"grader_api-key": "grader-key",
+		"api-key":        "primary-key",
+	} {
+		if err := os.WriteFile(filepath.Join(secretDir, key), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rp := NewModelReverseProxy(nil, upstream.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)), secretDir, "")
+	for _, auth := range []string{"", "Bearer token:direct", "Bearer api-key:ref", "Bearer grader_api-key:ref"} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.Header.Set("Authorization", auth)
+		rec := httptest.NewRecorder()
+		rp.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("auth %q: expected 400, got %d", auth, rec.Code)
+		}
+	}
+	if len(requests) != 0 {
+		t.Fatal("an unmatched request reached the upstream")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer judge_api-key:ref")
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || len(requests) != 1 {
+		t.Fatalf("matching judge request returned %d, upstream calls: %d", rec.Code, len(requests))
+	}
+	if got := <-requests; got != "Bearer judge-key" {
+		t.Error("upstream did not receive the judge credential")
+	}
+}

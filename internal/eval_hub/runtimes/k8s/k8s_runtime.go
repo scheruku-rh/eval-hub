@@ -532,7 +532,10 @@ func (r *K8sRuntime) createBenchmarkResources(ctx context.Context,
 	)
 	// When a model URL is present, redirect the adapter through the sidecar model proxy so
 	// all model traffic (open and authenticated) flows through the sidecar. For pre-recorded-data
-	// jobs the model URL is empty and the entire model proxy / auth pipeline is skipped.
+	// jobs the model URL is empty; the model proxy then serves the role endpoints the auth
+	// secret declares under <role>_url keys - any prefix (judge_url, grader_url, sdg_url,
+	// some_other_model_url, ...) - the same keys adapters resolve through the internal ref
+	// secret. Without any <role>_url the entire model proxy / auth pipeline is skipped as before.
 	var secretInfo modelSecretInfo
 	if jobConfig.modelTargetURL != "" {
 		rewrittenModelURL, err := rewriteModelURLForSidecar(jobConfig.sidecarBaseURL, jobConfig.modelTargetURL)
@@ -553,6 +556,28 @@ func (r *K8sRuntime) createBenchmarkResources(ctx context.Context,
 			} else if !secretInfo.hasCredentialKeys {
 				logger.Info("model credential secret has no proxy-injectable keys; sidecar proxy active for SA token")
 			}
+		}
+	} else if jobConfig.modelAuthSecretRef != "" {
+		roleSecretInfo, err := inspectModelSecret(ctx, jobConfig.namespace, jobConfig.modelAuthSecretRef, r.helper)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("job %s benchmark %s: reading model auth secret: %w", evaluation.Resource.ID, benchmarkID, err)
+		}
+		switch {
+		case apierrors.IsNotFound(err):
+			logger.Warn("Model auth Secret not found for job without a model URL; model proxy disabled",
+				"benchmark_id", benchmarkID, "secret", jobConfig.modelAuthSecretRef)
+			jobConfig.modelAuthSecretRef = ""
+		case !hasModelRoleURL(roleSecretInfo.data):
+			logger.Info("Model auth Secret has no role URL and job has no model URL; model proxy disabled",
+				"benchmark_id", benchmarkID, "secret", jobConfig.modelAuthSecretRef)
+			jobConfig.modelAuthSecretRef = ""
+		default:
+			secretInfo = roleSecretInfo
+			if !jobConfig.generationWorkload {
+				jobConfig.modelInternalRefSecretName = buildK8sName(jobConfig.jobID, jobConfig.resourceGUID, "-model-ref")
+			}
+			logger.Info("Model proxy configured from Secret endpoints for job without a model URL",
+				"benchmark_id", benchmarkID, "secret", jobConfig.modelAuthSecretRef)
 		}
 	}
 	// Build sidecar config after inspecting the model secret so modelInternalRefSecretName is set.
